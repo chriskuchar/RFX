@@ -1,0 +1,81 @@
+# Build directories
+build/
+build_*/
+cmake-build-*/
+*.cmake
+!CMakeLists.txt
+
+# Compiled files
+*.o
+*.so
+*.a
+*.dylib
+*.dll
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
+*.orig
+
+# Temporary files
+*.tmp
+*.log
+*.aux
+*.out
+*.fdb_latexmk
+*.fls
+*.synctex.gz
+
+# Data files (large datasets)
+*.data
+*.data.gz
+*.csv
+*.h5
+*.hdf5
+*.parquet
+
+# Output files
+outputs/
+results/
+*.html
+*.png
+*.pdf
+*.svg
+!papers/arxiv/*.pdf
+
+# Test outputs
+test_output*.txt
+*.out
+*.json
+!benchmark_results_manual.json
+
+# CUDA
+*.ptx
+*.cubin
+
+# Environment
+.env
+.venv
+venv/
+ENV/
+env/
+
