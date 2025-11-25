@@ -51,7 +51,7 @@ Beyond prediction accuracy, RFX implements Breiman & Cutler's complete analytica
 **Case-wise Analysis** - Track bootstrap frequencies to understand model uncertainty. Identify difficult samples (low agreement) vs. confident predictions.
 
 **Interactive Visualization (rfviz)** - Explore your data with a linked 2×2 grid: 3D MDS projection, parallel coordinates, class votes, and feature values. Interactive workflow in Jupyter notebooks:
-1. **Brush samples** in any view (click-drag to select)
+1. **Select samples** via brushing (click-drag in parallel coordinates) or point-by-point (3D MDS)
 2. **Linked highlighting** across all four plots simultaneously
 3. **Export selections** as JSON directly from the plot
 4. **Import to Python** for immediate feature analysis
