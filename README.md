@@ -24,6 +24,43 @@ RFX v1.0 provides complete classification capabilities with modern enhancements:
 - **GPU-accelerated MDS**: Power iteration method computing 3D embeddings directly from low-rank factors
 - **SM-aware GPU batching**: Automatic batch sizing based on GPU architecture, achieving 95% GPU utilization
 
+## Why RFX?
+
+RFX goes beyond prediction accuracy to provide deep insights into your data through Breiman & Cutler's original analytical toolkit:
+
+### Unique Analytical Capabilities
+
+**Local Importance** - Similar to SHAP values but built directly into the model, not added post-hoc. Understand *why* individual predictions were made by identifying which features drove decisions for specific samples. Enables per-patient diagnosis explanations, per-transaction fraud detection reasoning, and case-specific model interpretability—computed efficiently during training using out-of-bag samples.
+
+**Proximity Matrices** - Discover hidden structure in your data through pairwise sample similarities. Use proximities for:
+- **Outlier detection**: Find anomalous samples that don't cluster with their class
+- **Unsupervised clustering**: Group similar samples without labels
+- **Missing value imputation**: Fill missing data using similar samples
+- **Data visualization**: Project high-dimensional data into 2D/3D using MDS
+
+**Case-wise Analysis** - Track bootstrap frequencies to understand model uncertainty. Identify samples that are difficult to classify (low bootstrap agreement) vs. those the model is confident about.
+
+**Interactive Visualization (rfviz)** - Explore all outputs simultaneously in a linked 2×2 grid: 3D MDS projection, parallel coordinates, class votes, and sample selection. Brush samples in one view to highlight them across all views.
+
+### Feature Comparison
+
+| Feature | RFX | scikit-learn | cuML | randomForest (R) |
+|---------|-----|--------------|------|------------------|
+| **Interpretability & Discovery** | | | | |
+| Local importance (per-sample) | ✓ | ✗ | ✗ | ✓ |
+| Proximity matrices | ✓ | ✗ | ✗ | ✓ |
+| Case-wise analysis | ✓ | ✗ | ✗ | ~ |
+| Interactive visualization (rfviz) | ✓ | ✗ | ✗ | ~ |
+| **Modern Enhancements** | | | | |
+| GPU acceleration | ✓ | ✗ | ✓ | ✗ |
+| QLORA proximity (12,500× compression) | ✓ | ✗ | ✗ | ✗ |
+| CPU TriBlock proximity (2.7× compression) | ✓ | ✗ | ✗ | ✗ |
+| Scales to 200K+ samples | ✓ | ✗ | ✗ | ~60K |
+
+**Choose RFX when you need:** Model interpretability, feature discovery, outlier detection, data exploration, or proximity-based analysis on large datasets.
+
+**Coming in v2.0:** Regression and unsupervised learning modes.
+
 ## Installation
 
 ### Prerequisites
