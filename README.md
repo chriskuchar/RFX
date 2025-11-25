@@ -80,11 +80,13 @@ Beyond prediction accuracy, RFX implements Breiman & Cutler's complete analytica
 
 ## Installation
 
+**Note:** RFX currently requires CUDA toolkit for building. CPU-only build option coming soon. You can still run RFX in CPU-only mode by setting `use_gpu=False` in Python.
+
 ### Prerequisites
 
 - **CMake** 3.12 or higher
 - **Python** 3.7+ (tested up to 3.13)
-- **CUDA toolkit** 11.0+ (for GPU support, optional but recommended)
+- **CUDA toolkit** 11.0+ (required for building; GPU usage optional at runtime)
 - **C++ compiler** with C++17 support (GCC 7+, Clang 5+)
 - **OpenMP** (usually included with compiler)
 
