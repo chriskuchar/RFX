@@ -74,17 +74,21 @@ class CMakeBuild(build_ext):
         subprocess.check_call(['cmake', '--build', '.'] + build_args, cwd=self.build_temp)
 
 # Read README for long description
+# Use README_PYPI.md for PyPI (simplified), fallback to README.md
 long_description = ''
-if os.path.exists('README.md'):
+if os.path.exists('README_PYPI.md'):
+    with open('README_PYPI.md', encoding='utf-8') as f:
+        long_description = f.read()
+elif os.path.exists('README.md'):
     with open('README.md', encoding='utf-8') as f:
         long_description = f.read()
 
 setup(
-    name='RFX',
-    version='1.0.0',
+    name='rfx-ml',
+    version='1.0.1',
     author='Chris Kuchar',
     author_email='chrisjkuchar@gmail.com',
-    description='High-Performance Random Forests with GPU Acceleration andQLORA Compression',
+    description='High-Performance Random Forests with GPU Acceleration and QLORA Compression',
     long_description=long_description,
     long_description_content_type='text/markdown',
     url='https://github.com/chriskuchar/RFX',
@@ -132,7 +136,6 @@ setup(
         'Programming Language :: Python :: 3.12',
         'Programming Language :: Python :: 3.13',
         'Programming Language :: C++',
-        'Programming Language :: CUDA',
         'Topic :: Scientific/Engineering :: Artificial Intelligence',
         'Topic :: Scientific/Engineering :: Information Analysis',
         'Topic :: Software Development :: Libraries :: Python Modules',

@@ -6,6 +6,10 @@ if(POLICY CMP0148)
     cmake_policy(SET CMP0148 NEW)
 endif()
 
+# Suppress RPATH warnings (common with conda/anaconda environments)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
