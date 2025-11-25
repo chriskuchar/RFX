@@ -3,6 +3,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![arXiv](https://img.shields.io/badge/arXiv-XXXX.XXXXX-b31b1b.svg)](https://arxiv.org/abs/XXXX.XXXXX)
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![CUDA](https://img.shields.io/badge/CUDA-11.0+-76B900.svg?logo=nvidia)](https://developer.nvidia.com/cuda-toolkit)
 
 **RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology. 
 
@@ -50,9 +51,9 @@ Beyond prediction accuracy, RFX implements Breiman & Cutler's complete analytica
 
 **Case-wise Analysis** - Track bootstrap frequencies to understand model uncertainty. Identify difficult samples (low agreement) vs. confident predictions.
 
-**Interactive Visualization (rfviz)** - Explore your data with a linked 2×2 grid: 3D MDS projection, parallel coordinates, class votes, and feature values. Interactive workflow in Jupyter notebooks:
+**Interactive Visualization (rfviz)** - Explore your data with a 2×2 grid: 3D MDS projection, parallel coordinates, class votes, and feature values. Interactive workflow in Jupyter notebooks:
 1. **Select samples** via brushing (click-drag in parallel coordinates) or point-by-point (3D MDS)
-2. **Linked highlighting** across all four plots simultaneously
+2. **Linked highlighting** between parallel coordinate plots
 3. **Export selections** as JSON directly from the plot
 4. **Import to Python** for immediate feature analysis
 - Use case: Visually identify interesting patterns (outliers, misclassifications, clusters) → select them → discover their distinguishing features in real-time
@@ -307,15 +308,15 @@ The `rfviz` function creates an interactive 2×2 grid visualization in HTML form
 
 ![RFviz Interactive Visualization](examples/rfviz_example.png)
 
-*RFviz 2×2 grid showing synchronized views of the wine dataset.*
+*RFviz 2×2 grid showing coordinated views of the wine dataset.*
 
-**Four synchronized plots:**
+**Four coordinated views:**
 1. **Top-left**: Input features (parallel coordinates) - see actual feature values for each sample
 2. **Top-right**: Local importance (parallel coordinates) - compare feature contributions across samples
 3. **Bottom-left**: 3D MDS proximity plot (rotatable/zoomable) - samples close in 3D have similar Random Forest predictions
 4. **Bottom-right**: Class votes heatmap - see per-tree vote distributions (RAFT-style visualization)
 
-**Linked brushing**: Select samples in one plot (click-drag) to highlight them in all four plots simultaneously. Press **R** or **Escape** to clear selections. This enables powerful exploratory analysis - for example, select misclassified samples in one view to see what features or proximity patterns distinguish them.
+**Linked brushing**: Select samples in parallel coordinate plots (click-drag) to highlight them across the feature and importance views. Press **R** or **Escape** to clear selections. This enables powerful exploratory analysis - for example, select samples in one view to see what features or importance patterns distinguish them.
 
 **Jupyter notebook integration**: RFviz works seamlessly inline in `.ipynb` notebooks. Selected samples can be saved as JSON directly from the visualization, then imported back into Python for real-time analysis:
 
@@ -400,7 +401,7 @@ All plots have **linked brushing** - selecting samples in one plot highlights th
 
 ![RFviz Interactive Visualization](examples/rfviz_example.png)
 
-*Example: RFviz 2×2 grid showing synchronized views of the wine dataset. The interactive HTML version supports rotation, zooming, and linked brushing across all four plots.*
+*Example: RFviz 2×2 grid showing coordinated views of the wine dataset. The interactive HTML version supports 3D rotation/zooming and linked brushing between the parallel coordinate plots.*
 
 ### CPU TriBlock Proximity (Lossless Compression)
 
