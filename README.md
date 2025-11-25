@@ -50,7 +50,12 @@ Beyond prediction accuracy, RFX implements Breiman & Cutler's complete analytica
 
 **Case-wise Analysis** - Track bootstrap frequencies to understand model uncertainty. Identify difficult samples (low agreement) vs. confident predictions.
 
-**Interactive Visualization (rfviz)** - Linked 2×2 grid with 3D MDS, parallel coordinates, class votes, and brushing.
+**Interactive Visualization (rfviz)** - Explore your data with a linked 2×2 grid: 3D MDS projection, parallel coordinates, class votes, and feature values. Interactive workflow in Jupyter notebooks:
+1. **Brush samples** in any view (click-drag to select)
+2. **Linked highlighting** across all four plots simultaneously
+3. **Export selections** as JSON directly from the plot
+4. **Import to Python** for immediate feature analysis
+- Use case: Visually identify interesting patterns (outliers, misclassifications, clusters) → select them → discover their distinguishing features in real-time
 
 ### Feature Comparison
 
@@ -309,6 +314,28 @@ The `rfviz` function creates an interactive 2×2 grid visualization in HTML form
 4. **Bottom-right**: Class votes heatmap - see per-tree vote distributions (RAFT-style visualization)
 
 **Linked brushing**: Select samples in one plot (click-drag) to highlight them in all four plots simultaneously. Press **R** or **Escape** to clear selections. This enables powerful exploratory analysis - for example, select misclassified samples in one view to see what features or proximity patterns distinguish them.
+
+**Jupyter notebook integration**: RFviz works seamlessly inline in `.ipynb` notebooks. Selected samples can be saved as JSON directly from the visualization, then imported back into Python for real-time analysis:
+
+```python
+# In Jupyter notebook - generate interactive visualization
+rf.rfviz(model, X, y, feature_names=feature_names, output_file="rfviz.html")
+
+# After brushing samples in the visualization, save selection as JSON
+# (built-in button in the plot interface)
+
+# Import selected samples back into Python
+import json
+with open('rfviz_selection.json', 'r') as f:
+    selected_indices = json.load(f)
+
+# Analyze selected samples immediately
+selected_samples = X[selected_indices]
+selected_labels = y[selected_indices]
+# Continue analysis inline...
+```
+
+This interactive workflow enables iterative data exploration: visualize → select interesting patterns → analyze → refine → repeat.
 
 ### GPU Acceleration
 
