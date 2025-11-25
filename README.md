@@ -4,7 +4,9 @@
 [![arXiv](https://img.shields.io/badge/arXiv-XXXX.XXXXX-b31b1b.svg)](https://arxiv.org/abs/XXXX.XXXXX)
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 
-**RFX** (Random Forests X, where X represents compression/quantization) is a high-performance and production-ready Python implementation of Breiman and Cutler's original Random Forest classification methodology, faithfully following all algorithms from the original Fortran code with no shortcuts on methodology whatsoever. This work aims to honor the legacy of Leo Breiman and Adele Cutler by ensuring their Random Forest methodology is not forgotten and remains accessible to modern researchers.
+**RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology. 
+
+The implementation faithfully follows all algorithms from the original Fortran code with no shortcuts. This work honors the legacy of Leo Breiman and Adele Cutler by ensuring their Random Forest methodology remains accessible to modern researchers.
 
 ## Key Features
 
@@ -18,29 +20,37 @@ RFX v1.0 provides complete classification capabilities with modern enhancements:
 - **Interactive visualization**: Python-native rfviz with 3D MDS, parallel coordinates, and linked brushing
 
 ### Modern Enhancements
-- **GPU acceleration**: CUDA implementations for tree growing, importance computation, and proximity matrices
-- **QLORA proximity compression**: Quantized low-rank adaptation reducing 80GB matrices to 6.4MB (12,500× compression) with 99% geometric structure preservation
-- **CPU TriBlock proximity**: Upper-triangle + block-sparse storage achieving 2.7× memory reduction with lossless quality
-- **GPU-accelerated MDS**: Power iteration method computing 3D embeddings directly from low-rank factors
-- **SM-aware GPU batching**: Automatic batch sizing based on GPU architecture, achieving 95% GPU utilization
+
+RFX breaks the proximity memory bottleneck that historically limited analysis to ~60,000 samples:
+
+- **QLORA compression**: 12,500× memory reduction (80GB → 6.4MB) with 99% geometric accuracy
+- **CPU TriBlock**: 2.7× memory savings with lossless quality for medium-scale datasets
+- **Full GPU acceleration**: CUDA for trees, importance, and proximity matrices
+- **GPU MDS**: 3D embeddings computed directly from low-rank factors
+- **SM-aware batching**: Auto-scaling for 95% GPU utilization
+
+**Result:** Proximity-based workflows (outlier detection, clustering, visualization) now scale to 200K–1M+ samples.
 
 ## Why RFX?
 
-RFX is designed to provide comprehensive interpretability for Random Forests and help you gain deep insights into your data. Beyond prediction accuracy, RFX implements Breiman & Cutler's complete analytical toolkit for understanding model decisions, discovering data structure, and exploring sample relationships:
+RFX provides comprehensive interpretability for Random Forests and deep insights into your data.
+
+Beyond prediction accuracy, RFX implements Breiman & Cutler's complete analytical toolkit: understand model decisions, discover data structure, and explore sample relationships.
 
 ### Unique Analytical Capabilities
 
-**Local Importance** - Similar to SHAP values but built directly into the model, not added post-hoc. Understand *why* individual predictions were made by identifying which features drove decisions for specific samples. Enables per-patient diagnosis explanations, per-transaction fraud detection reasoning, and case-specific model interpretability—computed efficiently during training using out-of-bag samples.
+**Local Importance** - Similar to SHAP but built into the model, not post-hoc. Understand *why* individual predictions were made. Computed efficiently during training using out-of-bag samples.
+- Use cases: Medical diagnosis explanations, fraud detection reasoning, case-specific interpretability
 
-**Proximity Matrices** - Discover hidden structure in your data through pairwise sample similarities. Use proximities for:
-- **Outlier detection**: Find anomalous samples that don't cluster with their class
-- **Unsupervised clustering**: Group similar samples without labels
-- **Missing value imputation**: Fill missing data using similar samples
-- **Data visualization**: Project high-dimensional data into 2D/3D using MDS
+**Proximity Matrices** - Discover hidden structure through pairwise sample similarities:
+- **Outlier detection**: Find anomalous samples
+- **Clustering**: Group similar samples (dedicated unsupervised mode in v2.0)
+- **Imputation**: Fill missing values using similar samples
+- **Visualization**: 2D/3D projections via MDS
 
-**Case-wise Analysis** - Track bootstrap frequencies to understand model uncertainty. Identify samples that are difficult to classify (low bootstrap agreement) vs. those the model is confident about.
+**Case-wise Analysis** - Track bootstrap frequencies to understand model uncertainty. Identify difficult samples (low agreement) vs. confident predictions.
 
-**Interactive Visualization (rfviz)** - Explore all outputs simultaneously in a linked 2×2 grid: 3D MDS projection, parallel coordinates, class votes, and sample selection. Brush samples in one view to highlight them across all views.
+**Interactive Visualization (rfviz)** - Linked 2×2 grid with 3D MDS, parallel coordinates, class votes, and brushing.
 
 ### Feature Comparison
 
@@ -52,10 +62,12 @@ RFX is designed to provide comprehensive interpretability for Random Forests and
 | Case-wise analysis | ✓ | ✗ | ✗ | ~ |
 | Interactive visualization (rfviz) | ✓ | ✗ | ✗ | ~ |
 | **Modern Enhancements** | | | | |
-| GPU acceleration | ✓ | ✗ | ✓ | ✗ |
+| Full GPU acceleration* | ✓ | ✗ | ~ | ✗ |
 | QLORA proximity (12,500× compression) | ✓ | ✗ | ✗ | ✗ |
 | CPU TriBlock proximity (2.7× compression) | ✓ | ✗ | ✗ | ✗ |
 | Scales to 200K+ samples | ✓ | ✗ | ✗ | ~60K |
+
+*RFX: GPU acceleration for all features (trees, importance, proximity). cuML: GPU trees only.
 
 **Choose RFX when you need:** Model interpretability, feature discovery, outlier detection, data exploration, or proximity-based analysis on large datasets.
 
