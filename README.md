@@ -26,7 +26,7 @@ RFX v1.0 provides complete classification capabilities with modern enhancements:
 
 ## Why RFX?
 
-RFX goes beyond prediction accuracy to provide deep insights into your data through Breiman & Cutler's original analytical toolkit:
+RFX is designed to provide comprehensive interpretability for Random Forests and help you gain deep insights into your data. Beyond prediction accuracy, RFX implements Breiman & Cutler's complete analytical toolkit for understanding model decisions, discovering data structure, and exploring sample relationships:
 
 ### Unique Analytical Capabilities
 
