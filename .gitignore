@@ -1,18 +1,16 @@
 # Build directories
 build/
-build_*/
 cmake-build-*/
-*.cmake
-!CMakeLists.txt
 
-# Compiled files
+# Compiled object files (but NOT the final .so module)
 *.o
-*.so
 *.a
 *.dylib
 *.dll
+*.ptx
+*.cubin
 
-# Python
+# Python bytecode
 __pycache__/
 *.py[cod]
 *$py.class
@@ -39,38 +37,31 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.log
+
+# LaTeX auxiliary files
 *.aux
 *.out
 *.fdb_latexmk
 *.fls
 *.synctex.gz
+*.bbl
+*.blg
 
-# Data files (large datasets)
+# Large data files
 *.data
 *.data.gz
-*.csv
 *.h5
 *.hdf5
 *.parquet
 
-# Output files
+# Generated output (keep examples clean)
 outputs/
 results/
 *.html
-*.png
-*.pdf
-*.svg
-!papers/arxiv/*.pdf
+!examples/*.html
 
 # Test outputs
 test_output*.txt
-*.out
-*.json
-!benchmark_results_manual.json
-
-# CUDA
-*.ptx
-*.cubin
 
 # Environment
 .env
@@ -79,3 +70,14 @@ venv/
 ENV/
 env/
 
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# Dev files (not for release)
+docs/API_full.md
+
+# CMake generated
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile

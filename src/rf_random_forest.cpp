@@ -670,11 +670,11 @@ void RandomForest::fit_classification(const real_t* X, const integer_t* y, const
         rf::g_config.gpu_parallel_mode0 = (batch_size > 1);
         
         if (is_auto_scaled){
-            std::cout << "GPU: Auto-scaling selected batch size = " << batch_size << " trees (out of " << ntree_val << " total)" << std::endl;
+            // std::cout << "GPU: Auto-scaling selected batch size = " << batch_size << " trees (out of " << ntree_val << " total)" << std::endl;  // Commented for Jupyter safety
         } else {
-            std::cout << "GPU: Using manual batch size = " << batch_size << " trees (out of " << ntree_val << " total, config_.batch_size=" << config_.batch_size << ")" << std::endl;
+            // std::cout << "GPU: Using manual batch size = " << batch_size << " trees (out of " << ntree_val << " total, config_.batch_size=" << config_.batch_size << ")" << std::endl;  // Commented for Jupyter safety
         }
-        std::cout.flush();
+        // std::cout.flush();  // Commented for Jupyter safety
         fit_batch_gpu(X, y, sample_weight_.data(), batch_size);
         
         // CRITICAL: Validate object state after GPU operations to catch corruption
@@ -1329,6 +1329,9 @@ void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
         
         // Dispatch to appropriate importance calculation based on task type
         if (config_.task_type == TaskType::REGRESSION) {
+            // REGRESSION NOT SUPPORTED IN THIS RELEASE
+            throw std::runtime_error("Regression variable importance not implemented in this release. Classification only.");
+            /*
             // Use regression-specific importance (MSE-based)
             // Use actual number of nodes for this tree (nnode_[tree_id]) instead of maxnode
             integer_t actual_nnode = nnode_[tree_id];
@@ -1336,13 +1339,8 @@ void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
                 // Tree not grown yet or empty tree - skip importance computation
                 actual_nnode = 1;  // Use minimum value to avoid division by zero
             }
-            cpu_varimp_regression(X_train_.data(), config_.nsample, config_.mdim,
-                                  y_train_regression_.data(), nin_workspace_.data(), jtr_workspace_.data(), impn,
-                                  qimp_temp.data(), qimpm_temp.data(), avimp_temp.data(), sqsd_temp.data(),
-                                  treemap, nodestatus, xbestsplit, bestvar, nodeclass, actual_nnode,
-                                  reinterpret_cast<const integer_t*>(cat_.data()),
-                                  temp_jvr.data(), temp_nodexvr.data(),
-                                  config_.maxcat, catgoleft, tnodewt, nodextr_workspace_.data());
+            // cpu_varimp_regression(...) NOT IMPLEMENTED
+            */
         } else {
             // Use classification importance for classification and unsupervised
             // Use actual number of nodes for this tree (nnode_[tree_id]) instead of maxnode
@@ -1689,7 +1687,7 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
             wl_workspace_.data(), tclasscat_workspace_.data(), tclasspop_workspace_.data(), tmpclass_workspace_.data(),
             q_.data(), nout_.data(),             config_.compute_importance ? avimp_.data() : nullptr,
             (config_.compute_importance || config_.compute_local_importance) ? qimp_.data() : nullptr,
-            (config_.compute_importance || config_.compute_local_importance) ? qimpm_.data() : nullptr,
+            config_.compute_local_importance ? qimpm_.data() : nullptr,  // Only pass qimpm if local importance requested
             proximity_ptr,  // Pass proximity matrix pointer (allocated above for low-rank mode)
             (config_.task_type == TaskType::REGRESSION) ? oob_predictions_.data() : nullptr,  // For regression: accumulate OOB predictions
             (use_lowrank && use_upper_triangle) ? &lowrank_proximity_ptr_ : nullptr  // Store LowRankProximityMatrix pointer if low-rank mode
@@ -1698,12 +1696,10 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
         // std::cout << "[FIT_BATCH] gpu_growtree_batch RETURNED for batch " << batch_start << "-" << (batch_end-1) << std::endl;
         // std::cout.flush();
         
-        // CRITICAL: Explicit sync after batch to ensure all GPU ops complete before next batch
-        // This is crucial for parallel mode with multiple batches
+        // Sync after batch to ensure GPU ops complete before next batch
+        // Use stream sync for better Jupyter compatibility and performance
         #ifdef CUDA_FOUND
-        cudaDeviceSynchronize();
-        // std::cout << "[FIT_BATCH] cudaDeviceSynchronize COMPLETED" << std::endl;
-        // std::cout.flush();
+        cudaStreamSynchronize(0);
         #endif
         
         // Batch completed successfully - no debug print to avoid potential issues
@@ -2753,76 +2749,14 @@ const dp_t* RandomForest::get_proximity_matrix() const {
         rf::cuda::cuda_ensure_context_ready();
     }
     
-    // For low-rank mode, reconstruct from factors with RF-GAP normalization if needed
+    // For low-rank mode, DO NOT auto-reconstruct - return nullptr
+    // Users should call get_lowrank_factors() or compute_mds_3d_from_factors() instead
+    // Auto-reconstruction was causing performance issues and memory problems
     if (lowrank_proximity_ptr_ != nullptr) {
-        #ifdef CUDA_FOUND
-        // CRITICAL WARNING: Reconstructing full proximity matrix from low-rank factors
-        // requires O(n²) memory and can crash the system for large datasets!
-        // 
-        // Memory requirements:
-        //   - 10k samples: ~800 MB
-        //   - 50k samples: ~20 GB
-        //   - 100k samples: ~80 GB (likely to crash!)
-        //
-        // Instead of reconstructing, consider:
-        //   - get_lowrank_factors() to work with factors directly
-        //   - compute_mds_3d_from_factors() for visualization (memory efficient)
-        //   - compute_distances_from_factors() for distance computations (memory efficient)
-        
-        size_t matrix_size_bytes = static_cast<size_t>(config_.nsample) * config_.nsample * sizeof(dp_t);
-        size_t matrix_size_gb = matrix_size_bytes / (1024ULL * 1024ULL * 1024ULL);
-        
-        // if (config_.nsample > 10000) {
-        //     // std::cerr << "WARNING: get_proximity_matrix() called with low-rank mode active." << std::endl;  // Commented to avoid stream conflicts
-        //     // std::cerr << "WARNING: Reconstructing full matrix for " << config_.nsample 
-        //     //           << " samples requires ~" << matrix_size_gb 
-        //     //           << " GB of memory. This may crash your system!" << std::endl;  // Commented to avoid stream conflicts
-        //     // std::cerr << "WARNING: Consider using get_lowrank_factors() or compute_mds_3d_from_factors() instead." << std::endl;  // Commented to avoid stream conflicts
-        // }
-        
-        if (config_.nsample > 50000) {
-            // std::cerr << "ERROR: Dataset too large (" << config_.nsample 
-            //           << " samples) for full matrix reconstruction. Requires ~" << matrix_size_gb 
-            //           << " GB. Aborting to prevent system crash." << std::endl;  // Commented to avoid stream conflicts
-            // std::cerr << "ERROR: Use get_lowrank_factors() or compute_mds_3d_from_factors() instead." << std::endl;  // Commented to avoid stream conflicts
-            return nullptr;
-        }
-        
-        // Reconstruct full matrix from low-rank factors (on-demand)
-        // This allocates temporary memory, so use sparingly
-        if (proximity_matrix_.empty()) {
-            // Allocate temporary buffer for reconstruction
-            proximity_matrix_.resize(static_cast<size_t>(config_.nsample) * config_.nsample, 0.0);
-        }
-        
-        // Use helper function to reconstruct (with RF-GAP normalization if enabled)
-        dp_t* reconstructed_prox = nullptr;
-        bool success = rf::cuda::reconstruct_proximity_matrix_host(
-            lowrank_proximity_ptr_, &reconstructed_prox, config_.nsample);
-        
-        // CRITICAL: After GPU reconstruction, finalize to ensure all kernels complete
-        if (config_.use_gpu) {
-            rf::cuda::cuda_finalize_operations();
-        }
-        
-        if (success && reconstructed_prox != nullptr) {
-            // Copy to proximity_matrix_ and free temporary allocation
-            std::copy(reconstructed_prox, reconstructed_prox + config_.nsample * config_.nsample,
-                     proximity_matrix_.begin());
-            delete[] reconstructed_prox;
-            return proximity_matrix_.data();
-        } else {
-            // Reconstruction failed
-            // std::cerr << "ERROR: Failed to reconstruct proximity matrix from low-rank factors." << std::endl;  // Commented to avoid stream conflicts
-            if (reconstructed_prox != nullptr) {
-                delete[] reconstructed_prox;
-            }
-            return nullptr;
-        }
-        #else
-        // CUDA not available - cannot reconstruct
+        // Low-rank mode active - do not auto-reconstruct full matrix
+        // Use get_lowrank_factors() to get A, B factors directly
+        // Use compute_mds_3d_from_factors() for MDS visualization
         return nullptr;
-        #endif
     }
     // GPU synchronization is handled by GPU code itself before returning
     // Avoid direct CUDA calls in CPU compilation path

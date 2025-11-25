@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <thread>
 #include <chrono>
+#include <unistd.h>  // For getpid() - fork detection
 
 namespace rf {
 namespace cuda {
@@ -20,6 +21,7 @@ namespace cuda {
 // Global CUDA context management
 static bool g_cuda_initialized = false;
 static bool g_cuda_available = false;
+static pid_t g_cuda_init_pid = 0;  // Track which process initialized CUDA
 
 // Forward declaration
 void cuda_reset_device();
@@ -54,31 +56,43 @@ bool cuda_is_available() {
 }
 
 bool cuda_init_runtime(bool force_cpu) {
-    // If already initialized, return the cached result
+    // CRITICAL: XGBoost-style fork detection using PID tracking
+    // CUDA contexts cannot survive fork() - we must detect and reinitialize
+    // This is essential for Jupyter kernels which fork from a parent process
+    pid_t current_pid = getpid();
+    
     if (g_cuda_initialized) {
-        // Verbose output removed for Jupyter compatibility
-        // std::cout << "CUDA: Already initialized, returning cached result: " << g_cuda_available << std::endl;
-        return g_cuda_available;
+        // Check if we're in a different process (fork detected)
+        if (g_cuda_init_pid != 0 && g_cuda_init_pid != current_pid) {
+            // Fork detected! CUDA context from parent is invalid
+            // DON'T call cudaDeviceReset() - it can crash/hang in forked child
+            // Just reset flags and reinitialize fresh
+            
+            // Reset all flags to force reinitialization
+            g_cuda_initialized = false;
+            g_cuda_available = false;
+            g_cuda_init_pid = 0;
+            // Fall through to reinitialize
+        } else {
+            // Same process, return cached result
+            return g_cuda_available;
+        }
     }
     
     g_cuda_initialized = true;
+    g_cuda_init_pid = current_pid;  // Track which PID initialized CUDA
     
     if (force_cpu) {
-        // Verbose output removed for Jupyter compatibility
-        // std::cout << "CUDA: Disabled (force_cpu=true)" << std::endl;
         g_cuda_available = false;
         return false;
     }
 
-    // Jupyter/IPython check removed - GPU safety features now handle notebook compatibility
-    // Continue with CUDA initialization...
+    cudaGetLastError();  // Clear any stale errors
     
     // WSL/CUDA workaround: Clear any existing CUDA errors first
     // In WSL, cudaGetDeviceCount can fail with "out of memory" even when GPU is available.
     // We'll try cudaGetDeviceCount first, but if it fails, we'll attempt direct device access.
-    cudaGetLastError();  // Clear any stale errors
     
-    // Try to initialize CUDA runtime
     int device_count = 0;
     cudaError_t err = cudaGetDeviceCount(&device_count);
     bool device_count_ok = (err == cudaSuccess && device_count > 0);
@@ -115,9 +129,6 @@ bool cuda_init_runtime(bool force_cpu) {
         return false;
     }
     
-    // std::cout << "CUDA: Found " << device_count << " device(s)" << std::endl;
-    
-    // Set device and check for errors
     err = cudaSetDevice(0);
     if (err == cudaErrorDeviceAlreadyInUse || err == cudaErrorDevicesUnavailable) {
         // Device is busy - reset it to clear any stuck operations
@@ -156,6 +167,7 @@ bool cuda_init_runtime(bool force_cpu) {
     // Test context with a simple non-blocking allocation first
     void* test_alloc = nullptr;
     cudaError_t test_err = cudaMalloc(&test_alloc, 1);
+    
     if (test_err != cudaSuccess) {
         // Context might be corrupted - try reset
         // std::cout << "CUDA: Context test failed (" << cudaGetErrorString(test_err) << "), resetting device..." << std::endl;
@@ -177,10 +189,12 @@ bool cuda_init_runtime(bool force_cpu) {
     // Free test allocation
     if (test_alloc) { cudaError_t free_err = cudaFree(test_alloc); if (free_err != cudaSuccess) cudaGetLastError(); }
     
-    // Now synchronize to ensure context is fully ready (safe because we've validated it works)
-    err = cudaDeviceSynchronize();
+    // JUPYTER SAFETY: Use stream sync instead of device sync for Jupyter compatibility
+    // cudaStreamSynchronize(0) is safer after fork (Jupyter kernels) than cudaDeviceSynchronize()
+    // Device sync can hang if there's stale state from parent process after fork
+    err = cudaStreamSynchronize(0);
+    
     if (err != cudaSuccess) {
-        // std::cerr << "CUDA: Failed to synchronize device: " << err << " (" << cudaGetErrorString(err) << ")" << std::endl;
         g_cuda_available = false;
         return false;
     }
@@ -236,9 +250,9 @@ void cuda_cleanup() {
         // Clean up global RNG state
         cleanup_global_rng();
         
-        // Try to sync, but don't fail if CUDA context is already destroyed
-        // Use device sync like backup version
-        cudaDeviceSynchronize();
+        // JUPYTER SAFETY: Use stream sync instead of device sync
+        // Stream sync is safer in Jupyter where context might be partially corrupted
+        cudaStreamSynchronize(0);
         cudaGetLastError();  // Clear any errors from sync
         
         // Clear any remaining CUDA errors (if context still exists)
@@ -339,22 +353,38 @@ bool cuda_validate_context() {
 
 // Ensure CUDA context is ready before operations (like fit, predict, etc.)
 // This is called before any CUDA operation to ensure context is valid
+// XGBoost-style: Actually test if CUDA works, don't just trust flags
 void cuda_ensure_context_ready() {
     if (!g_cuda_available) return;
     
-    // Clear any stale errors first
-    cudaGetLastError();
+    // CRITICAL: Fork detection (Jupyter kernel restart)
+    // CUDA contexts cannot survive fork - we must reinitialize
+    // Use a lightweight check that won't crash: cudaGetDevice
+    cudaGetLastError();  // Clear any stale errors
     
-    // Validate context is accessible
-    cudaError_t err = cudaGetDevice(nullptr);
-    if (err != cudaSuccess) {
-        // Context might be corrupted - try to recover
+    int current_device = -1;
+    cudaError_t err = cudaGetDevice(&current_device);
+    
+    if (err != cudaSuccess || current_device < 0) {
+        // CUDA context is broken (likely after fork) - reinitialize
         cudaGetLastError();  // Clear error
-        // Don't reset aggressively - just clear errors
+        
+        // Reset the global flags to force reinitialization
+        g_cuda_initialized = false;
+        g_cuda_available = false;
+        
+        // Try to reinitialize without resetting (reset can hang in bad contexts)
+        try {
+            // Just reinitialize - let cuda_init_runtime handle device setup
+            cuda_init_runtime(false);
+        } catch (...) {
+            // If reinitialization fails, disable GPU
+            g_cuda_available = false;
+        }
         return;
     }
     
-    // Clear any remaining errors
+    // Device check succeeded - clear any remaining errors
     cudaGetLastError();
 }
 

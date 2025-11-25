@@ -27,17 +27,10 @@ void cpu_varimp(const real_t* x, integer_t nsample, integer_t mdim,
                integer_t maxcat, const integer_t* catgoleft,
                const real_t* tnodewt, const integer_t* nodextr);
 
-// Regression-specific variable importance
-void cpu_varimp_regression(const real_t* x, integer_t nsample, integer_t mdim,
-                           const real_t* y_true, const integer_t* nin, const integer_t* jtr_predictions,
-                           integer_t impn, real_t* qimp, real_t* qimpm,
-                           real_t* avimp, real_t* sqsd,
-                           const integer_t* treemap, const integer_t* nodestatus,
-                           const real_t* xbestsplit, const integer_t* bestvar,
-                           const integer_t* nodeclass, integer_t nnode,
-                           const integer_t* cat, integer_t* jvr, integer_t* nodexvr,
-                           integer_t maxcat, const integer_t* catgoleft,
-                           const real_t* tnodewt, const integer_t* nodextr);
+// Regression-specific variable importance - REMOVED FOR CLASSIFICATION-ONLY BUILD
+/*
+void cpu_varimp_regression(...) - NOT IMPLEMENTED
+*/
 
 // GPU variable importance implementations with parallel permutation testing
 void gpu_permobmr(const integer_t* joob, integer_t* pjoob, integer_t noob);

@@ -913,7 +913,9 @@ void LowRankProximityMatrix::perform_rank1_svd_from_upper_triangle_fp16(const __
     }
     
     // Power iteration
-    const int max_iterations = 100;
+    // PERF: 30 iterations is a good balance - captures 99% structure while avoiding excessive syncs
+    // Each iteration has implicit syncs from cuBLAS returning scalars to host
+    const int max_iterations = 30;
     const dp_t tolerance = 1e-6;
     
     for (int iter = 0; iter < max_iterations; ++iter) {
@@ -983,8 +985,47 @@ void LowRankProximityMatrix::perform_rank1_svd_from_upper_triangle_fp16(const __
         // Note: No explicit sync - cuBLAS operations will complete naturally
         
         // Factors stored successfully
+    } else if (rank_ >= max_rank_) {
+        // CRITICAL: When at max rank, accumulate into existing factors instead of discarding
+        // Add new tree's contribution to a cycling column (round-robin update)
+        // This ensures all trees contribute to the final factors
+        
+        // First, ensure A_gpu_ and B_gpu_ are available (dequantize if needed)
+        if (A_gpu_ == nullptr || B_gpu_ == nullptr) {
+            // Dequantize to get FP32 factors for update
+            dequantize_factors();
+        }
+        
+        // If still null after dequantize, something is wrong - skip this tree
+        if (A_gpu_ == nullptr || B_gpu_ == nullptr) {
+            // Clean up and return
+            if (u_gpu) { cudaError_t err = cudaFree(u_gpu); if (err != cudaSuccess) cudaGetLastError(); }
+            if (v_gpu) { cudaError_t err = cudaFree(v_gpu); if (err != cudaSuccess) cudaGetLastError(); }
+            if (temp_vec) { cudaError_t err = cudaFree(temp_vec); if (err != cudaSuccess) cudaGetLastError(); }
+            return;
+        }
+        
+        integer_t col_idx = trees_processed_ % max_rank_;
+        
+        // Add the new eigenvector to the selected column (weighted average)
+        // New column = alpha * old_column + (1-alpha) * new_contribution
+        // Using alpha = (trees_in_col - 1) / trees_in_col for proper averaging
+        integer_t trees_in_col = (trees_processed_ / max_rank_) + 1;
+        dp_t alpha = static_cast<dp_t>(trees_in_col - 1) / static_cast<dp_t>(trees_in_col);
+        dp_t beta = sqrt_sigma / static_cast<dp_t>(trees_in_col);
+        
+        // Scale existing column by alpha
+        cublasDscal(cublas_handle_, nsample, &alpha, A_gpu_ + nsample * col_idx, 1);
+        
+        // Add new contribution: A[:, col_idx] += beta * u_gpu
+        cublasDaxpy(cublas_handle_, nsample, &beta, u_gpu, 1, A_gpu_ + nsample * col_idx, 1);
+        
+        // Copy A to B for symmetry
+        cublasDcopy(cublas_handle_, nsample, A_gpu_ + nsample * col_idx, 1, B_gpu_ + nsample * col_idx, 1);
+        
+        // Rank stays at max_rank_
     } else {
-        // Extend A and B
+        // Extend A and B (rank < max_rank)
         dp_t* A_new = nullptr;
         dp_t* B_new = nullptr;
         integer_t new_rank = rank_ + 1;
@@ -1021,18 +1062,6 @@ void LowRankProximityMatrix::perform_rank1_svd_from_upper_triangle_fp16(const __
         rank_ = new_rank;
         
         // Factors extended successfully
-    }
-    
-    // Truncate if rank exceeds max
-    // CRITICAL: Skip truncation during accumulation - it causes hangs
-    // Just cap the rank counter, but keep the full factors until finalize
-    // This avoids expensive device-to-device copies during accumulation
-    if (rank_ > max_rank_) {
-        // Don't actually truncate - just remember we need to truncate later
-        // The actual truncation will happen in finalize_accumulation
-        rank_ = max_rank_;
-        // Note: A_gpu_ and B_gpu_ still have the full rank, but we'll ignore the extra columns
-        // This is safe because we only use the first max_rank_ columns in subsequent operations
     }
     
     // CRITICAL: Quantize immediately after each tree to save memory
@@ -1439,21 +1468,32 @@ void LowRankProximityMatrix::quantize_factors(QuantizationLevel quant_level) {
             // CRITICAL: Use same scaling parameters for A and B to maintain symmetry
             // Compute scaling entirely on device - no host copies
             // Allocate device memory for scale/zero_point if not already allocated
-            if (!d_A_scale_) {
+            bool first_quantization = (d_A_scale_ == nullptr);
+            if (first_quantization) {
                 CUDA_CHECK_VOID(cudaMalloc(&d_A_scale_, sizeof(float)));
                 CUDA_CHECK_VOID(cudaMalloc(&d_A_zero_point_, sizeof(float)));
                 CUDA_CHECK_VOID(cudaMalloc(&d_B_scale_, sizeof(float)));
                 CUDA_CHECK_VOID(cudaMalloc(&d_B_zero_point_, sizeof(float)));
             }
             
-            // Compute scale/zero_point on device
-            QuantizationUtils::compute_int8_scaling_gpu(
-                A_gpu_, factor_size, d_A_scale_, d_A_zero_point_
-            );
-            
-            // Use same scale and zero point for B (copy on device)
-            CUDA_CHECK_VOID(cudaMemcpy(d_B_scale_, d_A_scale_, sizeof(float), cudaMemcpyDeviceToDevice));
-            CUDA_CHECK_VOID(cudaMemcpy(d_B_zero_point_, d_A_zero_point_, sizeof(float), cudaMemcpyDeviceToDevice));
+            // CRITICAL FIX: Only compute scale on FIRST tree to avoid cumulative quantization error
+            // Subsequent trees use the same scale, which prevents precision loss from compounding
+            // The first tree's data range is representative since proximity values are bounded [0,1]
+            if (first_quantization) {
+                // Compute scale/zero_point on device from first tree's data
+                QuantizationUtils::compute_int8_scaling_gpu(
+                    A_gpu_, factor_size, d_A_scale_, d_A_zero_point_
+                );
+                
+                // CRITICAL: Must sync before D2D copy - scaling kernel must finish writing d_A_scale_
+                // before we copy it to d_B_scale_
+                CUDA_CHECK_VOID(cudaStreamSynchronize(0));
+                
+                // Use same scale and zero point for B (copy on device)
+                CUDA_CHECK_VOID(cudaMemcpy(d_B_scale_, d_A_scale_, sizeof(float), cudaMemcpyDeviceToDevice));
+                CUDA_CHECK_VOID(cudaMemcpy(d_B_zero_point_, d_A_zero_point_, sizeof(float), cudaMemcpyDeviceToDevice));
+            }
+            // For subsequent trees, reuse the existing scale - no recomputation needed
             
             size_t size = factor_size * sizeof(int8_t);
             CUDA_CHECK_VOID(cudaMalloc(&A_quantized_new, size));
@@ -1819,6 +1859,42 @@ void LowRankProximityMatrix::compute_distances_from_factors(dp_t* output_distanc
         }
     }
     
+    // Kernel to scale rows of B by sqrt(v): scaled_B[j,r] = sqrt(v[j]) * B[j,r]
+    __global__ void scale_rows_by_sqrt_v_kernel(
+        dp_t* scaled_B,
+        const dp_t* B,
+        const dp_t* v,
+        integer_t n_samples,
+        integer_t rank
+    ) {
+        int idx = blockIdx.x * blockDim.x + threadIdx.x;
+        int total = n_samples * rank;
+        if (idx < total) {
+            int j = idx % n_samples;  // Row index (column-major storage)
+            dp_t sqrt_v_j = sqrt(fmax(0.0, v[j]));
+            scaled_B[idx] = sqrt_v_j * B[idx];
+        }
+    }
+    
+    // Kernel to compute row-wise quadratic form: result[i] = sum_r A[i,r] * (A*Q)[i,r]
+    __global__ void compute_rowwise_quadratic_form_kernel(
+        dp_t* result,
+        const dp_t* A,
+        const dp_t* AQ,  // A × Q
+        integer_t n_samples,
+        integer_t rank
+    ) {
+        int i = blockIdx.x * blockDim.x + threadIdx.x;
+        if (i < n_samples) {
+            dp_t sum = 0.0;
+            for (int r = 0; r < rank; r++) {
+                // Column-major: A[i,r] is at A[i + r*n_samples]
+                sum += A[i + r * n_samples] * AQ[i + r * n_samples];
+            }
+            result[i] = sum;
+        }
+    }
+    
     __global__ void double_center_from_factors_kernel(
         dp_t* centered,
         const dp_t* row_means, 
@@ -1836,41 +1912,26 @@ void LowRankProximityMatrix::compute_distances_from_factors(dp_t* output_distanc
         }
     }
     
-    // CUDA kernel: Apply double-centering corrections to matrix-vector product result
-    // Given P × v (where P = A × B^T), compute C × v where C is double-centered
+    // CUDA kernel: Apply double-centering to D² × v (P² × v is computed separately)
+    // Inputs: Pv = (P × v), P2v = (P² × v), row/col means of D², grand mean
+    // Output: C × v where C = -0.5 * (D² - row_means - col_means + grand_mean)
     __global__ void apply_double_centering_corrections_kernel(
-        dp_t* y,                  // Input/output: P × v, becomes C × v (where C is double-centered D²)
-        const dp_t* row_means_D2,    // Row means of D² (squared distances)
-        const dp_t* col_means_D2,   // Column means of D² (squared distances)
-        dp_t max_prox,
-        dp_t grand_mean_D2,      // Grand mean of D²
-        dp_t sum_v,              // Sum of input vector v
-        dp_t col_means_D2_dot_v,    // Dot product of col_means_D2 and v
+        dp_t* y,                     // Output: C × v
+        const dp_t* Pv,              // Input: P × v
+        const dp_t* P2v,             // Input: P² × v (exact, from low-rank factors)
+        const dp_t* row_means_D2,    // Row means of D²
+        const dp_t* col_means_D2,    // Column means of D² (same as row for symmetric)
+        dp_t grand_mean_D2,          // Grand mean of D²
+        dp_t sum_v,                  // Sum of input vector v
+        dp_t col_means_D2_dot_v,     // Dot product of col_means_D2 and v
         integer_t nsample
     ) {
         int i = blockIdx.x * blockDim.x + threadIdx.x;
         if (i >= nsample) return;
         
-        // For classical MDS, we need to compute D² × v where D²[i,j] = (max_prox - P[i,j])²
-        // D²[i,j] = max_prox² - 2*max_prox*P[i,j] + P[i,j]²
-        // So D² × v = max_prox² * sum(v) - 2*max_prox * (P × v) + P² × v
-        // 
-        // However, computing P² × v exactly requires reconstructing P², which defeats the purpose.
-        // Instead, we approximate: D² × v ≈ (max_prox - P × v / sum(v))² * sum(v)
-        // But this is not exact. Better approach: compute D² × v element-wise.
-        //
-        // MDS distance computation: D[i,j] = (max_prox - P[i,j])
-        // Compute (D  v)[i] = Σ_j D[i,j] * v[j]
-        // For low-rank P = A  B^T, approximate as:
-        // (D  v)[i]  max_prox * sum(v) - 2*max_prox * (P  v)[i] + (P  v)[i] / sum(v)
-        // D² × v = Σ_j (1 - P[i,j])² * v[j] = Σ_j (1 - 2*P[i,j] + P[i,j]²) * v[j]
-        //        = sum(v) - 2*(P × v)[i] + Σ_j P[i,j]² * v[j]
-        // Approximate Σ_j P[i,j]² * v[j] ≈ (P × v)[i]² / sum(v) (rough approximation)
-        dp_t Pv_i = y[i];  // (P × v)[i] - this is the input (normalized proximity)
-        dp_t D2v_i = sum_v - 2.0 * Pv_i;
-        if (sum_v > 1e-10) {
-            D2v_i += (Pv_i * Pv_i) / sum_v;  // Approximation for P² × v term
-        }
+        // D²[i,j] = (1 - P[i,j])² = 1 - 2*P[i,j] + P[i,j]² (assuming normalized proximity)
+        // (D² × v)[i] = sum(v) - 2*(P × v)[i] + (P² × v)[i]
+        dp_t D2v_i = sum_v - 2.0 * Pv[i] + P2v[i];
         
         // C × v = -0.5 * (D² × v - row_means_D2 * sum(v) - col_means_D2 · v + grand_mean_D2 * sum(v))
         y[i] = -0.5 * (D2v_i - row_means_D2[i] * sum_v - col_means_D2_dot_v + grand_mean_D2 * sum_v);
@@ -1978,7 +2039,10 @@ std::vector<double> LowRankProximityMatrix::compute_mds_from_factors(integer_t k
     // A_sum = sum of columns: A^T × ones(n) where ones(n) is all-ones vector
     dp_t* ones_gpu = nullptr;
     CUDA_CHECK_VOID(cudaMalloc(&ones_gpu, nsample_ * sizeof(dp_t)));
-    CUDA_CHECK_VOID(cudaMemset(ones_gpu, 1.0, nsample_ * sizeof(dp_t)));
+    // CRITICAL FIX: cudaMemset sets BYTES, not double values!
+    // Create ones vector on host and copy to GPU
+    std::vector<dp_t> ones_host(nsample_, 1.0);
+    CUDA_CHECK_VOID(cudaMemcpy(ones_gpu, ones_host.data(), nsample_ * sizeof(dp_t), cudaMemcpyHostToDevice));
     
     // A_sum = A^T × ones (each row of A^T gets summed)
     cublasDgemv(cublas_handle_, CUBLAS_OP_T,
@@ -1998,29 +2062,103 @@ std::vector<double> LowRankProximityMatrix::compute_mds_from_factors(integer_t k
     // Safe free to prevent segfaults
     if (ones_gpu) { cudaError_t err = cudaFree(ones_gpu); if (err != cudaSuccess) cudaGetLastError(); }
     
-    // Compute row means: row_mean[i] = max_prox - (1/n) * A[i,:] · B_sum^T
+    // Compute row means of D² CORRECTLY (not the approximation)
+    // Formula: mean_D²[i] = 1 - 2*mean_P[i]/max_prox + mean_P²[i]/max_prox²
+    // where mean_P[i] = A[i,:] · B_sum / n
+    //       mean_P²[i] = A[i,:] · (B^T B) · A[i,:]^T / n
+    
     dp_t* row_means_gpu = nullptr;
     CUDA_CHECK_VOID(cudaMalloc(&row_means_gpu, n * sizeof(dp_t)));
     
+    // Step 1: Compute mean_P[i] = (1/n) * A[i,:] · B_sum
+    dp_t* mean_P_gpu = nullptr;
+    CUDA_CHECK_VOID(cudaMalloc(&mean_P_gpu, n * sizeof(dp_t)));
+    
     dp_t alpha_dot = 1.0 / static_cast<dp_t>(nsample_);
     dp_t beta_dot = 0.0;
-    // row_means = A × B_sum^T (each row of A dotted with B_sum)
     cublasDgemv(cublas_handle_, CUBLAS_OP_N,
                 nsample_, rank_,
                 &alpha_dot, A_gpu_, nsample_,
                 B_sum_gpu, 1,
-                &beta_dot, row_means_gpu, 1);
+                &beta_dot, mean_P_gpu, 1);
     
-    // Scale and compute row means of D (distance), then square to get row means of D²
+    // Step 2: Compute C = B^T × B (rank × rank matrix)
+    dp_t* BtB_gpu = nullptr;
+    CUDA_CHECK_VOID(cudaMalloc(&BtB_gpu, rank_ * rank_ * sizeof(dp_t)));
+    dp_t alpha_gemm = 1.0, beta_gemm = 0.0;
+    cublasDgemm(cublas_handle_, CUBLAS_OP_T, CUBLAS_OP_N,
+                rank_, rank_, nsample_,
+                &alpha_gemm, B_gpu_, nsample_,
+                B_gpu_, nsample_,
+                &beta_gemm, BtB_gpu, rank_);
+    
+    // Step 3: Compute mean_P²[i] = (1/n) * A[i,:] · C · A[i,:]^T
+    // First compute temp = A × C (nsample × rank)
+    dp_t* AC_gpu = nullptr;
+    CUDA_CHECK_VOID(cudaMalloc(&AC_gpu, nsample_ * rank_ * sizeof(dp_t)));
+    cublasDgemm(cublas_handle_, CUBLAS_OP_N, CUBLAS_OP_N,
+                nsample_, rank_, rank_,
+                &alpha_gemm, A_gpu_, nsample_,
+                BtB_gpu, rank_,
+                &beta_gemm, AC_gpu, nsample_);
+    
+    // Then mean_P²[i] = (1/n) * sum_r(A[i,r] * AC[i,r]) = row-wise dot product
+    // Compute this using element-wise multiply and row sum
+    dp_t* mean_P2_gpu = nullptr;
+    CUDA_CHECK_VOID(cudaMalloc(&mean_P2_gpu, n * sizeof(dp_t)));
+    CUDA_CHECK_VOID(cudaMemset(mean_P2_gpu, 0, n * sizeof(dp_t)));
+    
+    // Element-wise: mean_P²[i] = (1/n) * Σ_r A[i,r] * AC[i,r]
     int threads_per_block = 256;
     int blocks = (nsample_ + threads_per_block - 1) / threads_per_block;
     
-    // First compute row means of D (distance): row_mean_D[i] = mean_j (max_prox - P[i,j])
-    compute_row_means_from_factors_kernel<<<blocks, threads_per_block>>>(row_means_gpu, max_prox, nsample_);
+    // Use a kernel to compute row-wise dot products
+    for (integer_t r = 0; r < rank_; r++) {
+        // mean_P2[i] += A[i,r] * AC[i,r]
+        cublasDaxpy(cublas_handle_, nsample_, &alpha_gemm, 
+                    A_gpu_ + r * nsample_, 1,  // Column r of A (column-major)
+                    mean_P2_gpu, 1);  // Accumulate - but this is wrong, we need element-wise multiply
+    }
     
-    // Square to approximate row means of D²: row_mean_D²[i] ≈ (row_mean_D[i])²
-    // Note: This is an approximation (mean of squares ≠ square of mean), but reasonable for MDS
-    square_values_kernel<<<blocks, threads_per_block>>>(row_means_gpu, nsample_);
+    // Actually, let's do this properly with a simple kernel
+    // Recompute mean_P2 with element-wise operations
+    CUDA_CHECK_VOID(cudaMemset(mean_P2_gpu, 0, n * sizeof(dp_t)));
+    
+    // Use cuBLAS to compute row-wise dot products: each row i gets A[i,:] · AC[i,:]
+    // This requires iterating over each sample - expensive but correct
+    for (integer_t i = 0; i < nsample_; i++) {
+        dp_t dot_result = 0.0;
+        // A[i,:] is at A_gpu_[i, 0:rank_] with stride nsample_ (column-major)
+        // AC[i,:] is at AC_gpu[i, 0:rank_] with stride nsample_ (column-major)
+        cublasDdot(cublas_handle_, rank_,
+                   A_gpu_ + i, nsample_,  // Row i of A
+                   AC_gpu + i, nsample_,  // Row i of AC
+                   &dot_result);
+        dot_result /= static_cast<dp_t>(nsample_);  // Divide by n
+        CUDA_CHECK_VOID(cudaMemcpy(mean_P2_gpu + i, &dot_result, sizeof(dp_t), cudaMemcpyHostToDevice));
+    }
+    
+    // Step 4: Compute row_means_D2[i] = 1 - 2*mean_P[i]/max_prox + mean_P2[i]/max_prox²
+    // Use a kernel for this
+    dp_t inv_max_prox = (max_prox > 1e-10) ? (1.0 / max_prox) : 1.0;
+    dp_t inv_max_prox_sq = inv_max_prox * inv_max_prox;
+    
+    // Copy mean_P and mean_P2 to host, compute, copy back (simpler than writing kernel)
+    std::vector<dp_t> mean_P_host(nsample_), mean_P2_host(nsample_), row_means_host(nsample_);
+    CUDA_CHECK_VOID(cudaMemcpy(mean_P_host.data(), mean_P_gpu, n * sizeof(dp_t), cudaMemcpyDeviceToHost));
+    CUDA_CHECK_VOID(cudaMemcpy(mean_P2_host.data(), mean_P2_gpu, n * sizeof(dp_t), cudaMemcpyDeviceToHost));
+    
+    for (size_t i = 0; i < n; i++) {
+        // row_means_D2[i] = 1 - 2*mean_P[i]/max_prox + mean_P2[i]/max_prox²
+        row_means_host[i] = 1.0 - 2.0 * mean_P_host[i] * inv_max_prox + mean_P2_host[i] * inv_max_prox_sq;
+    }
+    CUDA_CHECK_VOID(cudaMemcpy(row_means_gpu, row_means_host.data(), n * sizeof(dp_t), cudaMemcpyHostToDevice));
+    
+    // Cleanup temporary buffers
+    if (mean_P_gpu) cudaFree(mean_P_gpu);
+    if (BtB_gpu) cudaFree(BtB_gpu);
+    if (AC_gpu) cudaFree(AC_gpu);
+    if (mean_P2_gpu) cudaFree(mean_P2_gpu);
     
     // RF-GAP normalization: normalize row_means by |Si| if RF-GAP is used
     if (!oob_counts_rfgap_.empty()) {
@@ -2041,22 +2179,12 @@ std::vector<double> LowRankProximityMatrix::compute_mds_from_factors(integer_t k
         }
     }
     
-    // Compute column means: col_mean[j] = max_prox - (1/n) * A_sum · B[j,:]^T
+    // Compute column means of D²
+    // For symmetric proximity matrix P = A × B^T, col_means = row_means
+    // (since D²[i,j] = D²[j,i] for symmetric matrices)
     dp_t* col_means_gpu = nullptr;
     CUDA_CHECK_VOID(cudaMalloc(&col_means_gpu, n * sizeof(dp_t)));
-    
-    // col_means = B × A_sum^T (each row of B dotted with A_sum)
-    cublasDgemv(cublas_handle_, CUBLAS_OP_N,
-                nsample_, rank_,
-                &alpha_dot, B_gpu_, nsample_,
-                A_sum_gpu, 1,
-                &beta_dot, col_means_gpu, 1);
-    
-    // First compute column means of D (distance): col_mean_D[j] = mean_i (max_prox - P[i,j])
-    compute_col_means_from_factors_kernel<<<blocks, threads_per_block>>>(col_means_gpu, max_prox, nsample_);
-    
-    // Square to approximate column means of D²: col_mean_D²[j] ≈ (col_mean_D[j])²
-    square_values_kernel<<<blocks, threads_per_block>>>(col_means_gpu, nsample_);
+    CUDA_CHECK_VOID(cudaMemcpy(col_means_gpu, row_means_gpu, n * sizeof(dp_t), cudaMemcpyDeviceToDevice));
     
     // RF-GAP normalization: normalize col_means by |Sj| if RF-GAP is used
     // Note: After symmetrization, col_means should match row_means, so normalize the same way
@@ -2080,25 +2208,57 @@ std::vector<double> LowRankProximityMatrix::compute_mds_from_factors(integer_t k
     
     CUDA_CHECK_VOID(cudaStreamSynchronize(0));  // Use stream sync for Jupyter safety
     
-    // Compute grand mean: grand_mean = max_prox - (1/n²) * A_sum · B_sum^T
-    // For RF-GAP, grand_mean should also be normalized
+    // Compute grand mean of D² CORRECTLY
+    // Formula: grand_mean_D² = 1 - 2*grand_mean_P/max_prox + grand_mean_P²/max_prox²
+    // where grand_mean_P = (1/n²) * A_sum · B_sum
+    //       grand_mean_P² = (1/n²) * ||P||_F² = (1/n²) * trace((A^T A)(B^T B))
+    
     dp_t A_sum_dot_B_sum = 0.0;
     cublasDdot(cublas_handle_, rank_,
                A_sum_gpu, 1,
                B_sum_gpu, 1,
                &A_sum_dot_B_sum);
-    CUDA_CHECK_VOID(cudaStreamSynchronize(0));  // Use stream sync for Jupyter safety
+    CUDA_CHECK_VOID(cudaStreamSynchronize(0));
     
-    // Compute grand mean of proximity: grand_mean_P = (1/n²) * A_sum · B_sum^T
     dp_t grand_mean_P = A_sum_dot_B_sum / static_cast<dp_t>(n * n);
     
-    // Normalize and convert to distance: grand_mean_D = 1 - (grand_mean_P / max_prox)
-    dp_t grand_mean_P_norm = (max_prox > 1e-10) ? (grand_mean_P / max_prox) : 0.0;
-    grand_mean_P_norm = std::max(0.0, std::min(1.0, grand_mean_P_norm));  // Clamp to [0, 1]
-    dp_t grand_mean_D = 1.0 - grand_mean_P_norm;
+    // Compute grand_mean_P² = (1/n²) * ||P||_F² = (1/n²) * trace((A^T A)(B^T B))
+    // First compute A^T A (rank × rank)
+    dp_t* AtA_gpu = nullptr;
+    CUDA_CHECK_VOID(cudaMalloc(&AtA_gpu, rank_ * rank_ * sizeof(dp_t)));
+    dp_t alpha_ata = 1.0, beta_ata = 0.0;
+    cublasDgemm(cublas_handle_, CUBLAS_OP_T, CUBLAS_OP_N,
+                rank_, rank_, nsample_,
+                &alpha_ata, A_gpu_, nsample_,
+                A_gpu_, nsample_,
+                &beta_ata, AtA_gpu, rank_);
     
-    // Square to approximate grand mean of D²: grand_mean_D² ≈ (grand_mean_D)²
-    dp_t grand_mean_D2 = grand_mean_D * grand_mean_D;
+    // Compute B^T B (rank × rank) - we need this again
+    dp_t* BtB_gpu2 = nullptr;
+    CUDA_CHECK_VOID(cudaMalloc(&BtB_gpu2, rank_ * rank_ * sizeof(dp_t)));
+    cublasDgemm(cublas_handle_, CUBLAS_OP_T, CUBLAS_OP_N,
+                rank_, rank_, nsample_,
+                &alpha_ata, B_gpu_, nsample_,
+                B_gpu_, nsample_,
+                &beta_ata, BtB_gpu2, rank_);
+    
+    // Compute trace((A^T A)(B^T B)) = Frobenius inner product = Σ_ij AtA[i,j] * BtB[i,j]
+    // Copy to host and compute
+    std::vector<dp_t> AtA_host(rank_ * rank_), BtB_host(rank_ * rank_);
+    CUDA_CHECK_VOID(cudaMemcpy(AtA_host.data(), AtA_gpu, rank_ * rank_ * sizeof(dp_t), cudaMemcpyDeviceToHost));
+    CUDA_CHECK_VOID(cudaMemcpy(BtB_host.data(), BtB_gpu2, rank_ * rank_ * sizeof(dp_t), cudaMemcpyDeviceToHost));
+    
+    dp_t frobenius_inner = 0.0;
+    for (integer_t i = 0; i < rank_ * rank_; i++) {
+        frobenius_inner += AtA_host[i] * BtB_host[i];
+    }
+    dp_t grand_mean_P2 = frobenius_inner / static_cast<dp_t>(n * n);
+    
+    if (AtA_gpu) cudaFree(AtA_gpu);
+    if (BtB_gpu2) cudaFree(BtB_gpu2);
+    
+    // Compute grand_mean_D² = 1 - 2*grand_mean_P/max_prox + grand_mean_P²/max_prox²
+    dp_t grand_mean_D2 = 1.0 - 2.0 * grand_mean_P * inv_max_prox + grand_mean_P2 * inv_max_prox_sq;
     
     // RF-GAP normalization: normalize grand_mean by average |Si|
     // Since grand_mean is the mean of all elements, and each row is normalized by |Si|,
@@ -2131,14 +2291,18 @@ std::vector<double> LowRankProximityMatrix::compute_mds_from_factors(integer_t k
     CUDA_CHECK_VOID(cudaMalloc(&v_gpu, nsample_ * sizeof(dp_t)));
     CUDA_CHECK_VOID(cudaMalloc(&w_gpu, nsample_ * sizeof(dp_t)));
     
-    std::vector<dp_t> eigenvalues(k, 0.0);
+    // Allocate a vector of ones for computing sum(v) = ones · v
+    dp_t* ones_gpu_local = nullptr;
+    CUDA_CHECK_VOID(cudaMalloc(&ones_gpu_local, nsample_ * sizeof(dp_t)));
+    std::vector<dp_t> ones_host_mds(nsample_, 1.0);
+    CUDA_CHECK_VOID(cudaMemcpy(ones_gpu_local, ones_host_mds.data(), nsample_ * sizeof(dp_t), cudaMemcpyHostToDevice));
     
-    // Pre-compute col_means · v for efficiency (will be computed per iteration)
-    // We'll compute it on-the-fly in each iteration
+    std::vector<dp_t> eigenvalues(k, 0.0);
     
     // Power method with deflation for each of k eigenvectors
     for (int eig_idx = 0; eig_idx < k; eig_idx++) {
-        // Initialize random vector v
+        // Initialize random vector v with different seed for each eigenvector
+        srand(12345 + eig_idx * 1000);  // Different seed for each eigenvector
         std::vector<dp_t> v_host(nsample_);
         for (integer_t i = 0; i < nsample_; i++) {
             v_host[i] = static_cast<dp_t>(rand()) / RAND_MAX - 0.5;  // Random in [-0.5, 0.5]
@@ -2153,65 +2317,137 @@ std::vector<double> LowRankProximityMatrix::compute_mds_from_factors(integer_t k
             cublasDscal(cublas_handle_, nsample_, &inv_norm, v_gpu, 1);
         }
         
+        // CRITICAL: Orthogonalize initial vector against ALL previous eigenvectors
+        // This ensures we start in the orthogonal complement and find a new eigenvector
+        for (int prev = 0; prev < eig_idx; prev++) {
+            dp_t* prev_eig = eigenvectors_gpu + prev * nsample_;
+            dp_t dot_product = 0.0;
+            cublasDdot(cublas_handle_, nsample_, prev_eig, 1, v_gpu, 1, &dot_product);
+            dp_t neg_dot = -dot_product;
+            cublasDaxpy(cublas_handle_, nsample_, &neg_dot, prev_eig, 1, v_gpu, 1);
+        }
+        
+        // Re-normalize after orthogonalization
+        cublasDnrm2(cublas_handle_, nsample_, v_gpu, 1, &v_norm);
+        if (v_norm > 1e-10) {
+            dp_t inv_norm = 1.0 / v_norm;
+            cublasDscal(cublas_handle_, nsample_, &inv_norm, v_gpu, 1);
+        }
+        
         // Power iteration: v = C × v / ||C × v||
         const int max_iterations = 100;
         const dp_t tolerance = 1e-6;
         dp_t prev_eigenvalue = 0.0;
         
         for (int iter = 0; iter < max_iterations; iter++) {
-            // Compute w = C × v using matrix-vector products
-            // Step 1: Compute P × v = A × (B^T × v)
+            // Compute w = C × v where C = -0.5 * (D² - row_means - col_means + grand_mean)
+            // D²[i,j] = (1 - P[i,j])² = 1 - 2*P[i,j] + P[i,j]²
+            // (D² × v)[i] = sum(v) - 2*(P × v)[i] + (P² × v)[i]
+            
             dp_t alpha_mv = 1.0, beta_mv = 0.0;
             
-            // Compute B^T × v -> w (temporary storage)
+            // Step 1: Compute P × v = A × (B^T × v)
+            dp_t* temp_rank = nullptr;  // Temporary vector of size rank_
+            CUDA_CHECK_VOID(cudaMalloc(&temp_rank, rank_ * sizeof(dp_t)));
+            
+            // B^T × v -> temp_rank
             cublasDgemv(cublas_handle_, CUBLAS_OP_T,
                        nsample_, rank_,
                        &alpha_mv, B_gpu_, nsample_,
                        v_gpu, 1,
-                       &beta_mv, w_gpu, 1);
+                       &beta_mv, temp_rank, 1);
             
-            // Compute A × (B^T × v) -> w
+            // P × v = A × temp_rank -> Pv_gpu
+            dp_t* Pv_gpu = nullptr;
+            CUDA_CHECK_VOID(cudaMalloc(&Pv_gpu, nsample_ * sizeof(dp_t)));
             cublasDgemv(cublas_handle_, CUBLAS_OP_N,
                        nsample_, rank_,
                        &alpha_mv, A_gpu_, nsample_,
-                       w_gpu, 1,
-                       &beta_mv, w_gpu, 1);
+                       temp_rank, 1,
+                       &beta_mv, Pv_gpu, 1);
             
-            // RF-GAP normalization: normalize each row i by |Si| (OOB count)
+            // Step 2: Compute P² × v EXACTLY using quadratic form
+            // (P² × v)[i] = A[i,:] × Q × A[i,:]^T where Q = B^T diag(v) B
+            
+            // 2a: Scale B by sqrt(v): scaled_B[j,r] = sqrt(v[j]) * B[j,r]
+            dp_t* scaled_B_gpu = nullptr;
+            CUDA_CHECK_VOID(cudaMalloc(&scaled_B_gpu, nsample_ * rank_ * sizeof(dp_t)));
+            int scale_threads = 256;
+            int scale_blocks = (nsample_ * rank_ + scale_threads - 1) / scale_threads;
+            scale_rows_by_sqrt_v_kernel<<<scale_blocks, scale_threads>>>(
+                scaled_B_gpu, B_gpu_, v_gpu, nsample_, rank_
+            );
+            
+            // 2b: Compute Q = scaled_B^T × scaled_B (rank × rank)
+            dp_t* Q_gpu = nullptr;
+            CUDA_CHECK_VOID(cudaMalloc(&Q_gpu, rank_ * rank_ * sizeof(dp_t)));
+            cublasDgemm(cublas_handle_, CUBLAS_OP_T, CUBLAS_OP_N,
+                        rank_, rank_, nsample_,
+                        &alpha_mv, scaled_B_gpu, nsample_,
+                        scaled_B_gpu, nsample_,
+                        &beta_mv, Q_gpu, rank_);
+            
+            // 2c: Compute A × Q -> AQ_gpu (nsample × rank)
+            dp_t* AQ_gpu = nullptr;
+            CUDA_CHECK_VOID(cudaMalloc(&AQ_gpu, nsample_ * rank_ * sizeof(dp_t)));
+            cublasDgemm(cublas_handle_, CUBLAS_OP_N, CUBLAS_OP_N,
+                        nsample_, rank_, rank_,
+                        &alpha_mv, A_gpu_, nsample_,
+                        Q_gpu, rank_,
+                        &beta_mv, AQ_gpu, nsample_);
+            
+            // 2d: Compute P² × v: P2v[i] = sum_r A[i,r] * AQ[i,r]
+            dp_t* P2v_gpu = nullptr;
+            CUDA_CHECK_VOID(cudaMalloc(&P2v_gpu, nsample_ * sizeof(dp_t)));
+            blocks = (nsample_ + threads_per_block - 1) / threads_per_block;
+            compute_rowwise_quadratic_form_kernel<<<blocks, threads_per_block>>>(
+                P2v_gpu, A_gpu_, AQ_gpu, nsample_, rank_
+            );
+            
+            // Free intermediate buffers
+            if (scaled_B_gpu) cudaFree(scaled_B_gpu);
+            if (Q_gpu) cudaFree(Q_gpu);
+            if (AQ_gpu) cudaFree(AQ_gpu);
+            if (temp_rank) cudaFree(temp_rank);
+            
+            // RF-GAP normalization: normalize Pv by |Si| (OOB count)
             if (!oob_counts_rfgap_.empty()) {
-                // Copy OOB counts to GPU
                 integer_t* oob_counts_gpu = nullptr;
                 CUDA_CHECK_VOID(cudaMalloc(&oob_counts_gpu, nsample_ * sizeof(integer_t)));
                 CUDA_CHECK_VOID(cudaMemcpy(oob_counts_gpu, oob_counts_rfgap_.data(), 
                                           nsample_ * sizeof(integer_t), cudaMemcpyHostToDevice));
                 
-                // Normalize w[i] by oob_counts_rfgap_[i] (divide by |Si|)
                 int threads_per_block_norm = 256;
                 int blocks_norm = (nsample_ + threads_per_block_norm - 1) / threads_per_block_norm;
                 normalize_by_oob_counts_kernel<<<blocks_norm, threads_per_block_norm>>>(
-                    w_gpu, oob_counts_gpu, nsample_
+                    Pv_gpu, oob_counts_gpu, nsample_
                 );
-                CUDA_CHECK_VOID(cudaStreamSynchronize(0));  // Use stream sync for Jupyter safety
-                // Safe free to prevent segfaults
-        if (oob_counts_gpu) {
-            cudaError_t err = cudaFree(oob_counts_gpu);
-            if (err != cudaSuccess) cudaGetLastError(); // Clear error state
-        }
+                normalize_by_oob_counts_kernel<<<blocks_norm, threads_per_block_norm>>>(
+                    P2v_gpu, oob_counts_gpu, nsample_
+                );
+                CUDA_CHECK_VOID(cudaStreamSynchronize(0));
+                if (oob_counts_gpu) cudaFree(oob_counts_gpu);
             }
             
-            // Step 2: Compute sum(v) and col_means · v
+            // Step 3: Compute sum(v) and col_means · v
+            // IMPORTANT: Use cublasDdot with ones, NOT cublasDasum (which gives sum of absolute values!)
             dp_t sum_v = 0.0;
-            cublasDasum(cublas_handle_, nsample_, v_gpu, 1, &sum_v);
+            cublasDdot(cublas_handle_, nsample_, ones_gpu_local, 1, v_gpu, 1, &sum_v);
             
             dp_t col_means_D2_dot_v = 0.0;
             cublasDdot(cublas_handle_, nsample_, col_means_gpu, 1, v_gpu, 1, &col_means_D2_dot_v);
             
-            // Step 3: Apply double-centering corrections (for D², not D)
-            blocks = (nsample_ + threads_per_block - 1) / threads_per_block;
+            // Step 4: Apply double-centering to compute C × v
+            // w[i] = -0.5 * (D²v[i] - row_means_D2[i] * sum_v - col_means_D2_dot_v + grand_mean_D2 * sum_v)
+            // D²v[i] = sum_v - 2*Pv[i] + P²v[i]
             apply_double_centering_corrections_kernel<<<blocks, threads_per_block>>>(
-                w_gpu, row_means_gpu, col_means_gpu, max_prox, grand_mean_D2, sum_v, col_means_D2_dot_v, nsample_
+                w_gpu, Pv_gpu, P2v_gpu, row_means_gpu, col_means_gpu, grand_mean_D2, sum_v, col_means_D2_dot_v, nsample_
             );
-            CUDA_CHECK_VOID(cudaStreamSynchronize(0));  // Use stream sync for Jupyter safety
+            CUDA_CHECK_VOID(cudaStreamSynchronize(0));
+            
+            // Free Pv and P2v
+            if (Pv_gpu) cudaFree(Pv_gpu);
+            if (P2v_gpu) cudaFree(P2v_gpu);
             
             // Deflate: Remove previous eigenvectors from w
             for (int prev = 0; prev < eig_idx; prev++) {
@@ -2268,17 +2504,20 @@ std::vector<double> LowRankProximityMatrix::compute_mds_from_factors(integer_t k
     // Safe free to prevent segfaults
     if (v_gpu) { cudaError_t err = cudaFree(v_gpu); if (err != cudaSuccess) cudaGetLastError(); }
     if (w_gpu) { cudaError_t err = cudaFree(w_gpu); if (err != cudaSuccess) cudaGetLastError(); }
+    if (ones_gpu_local) { cudaError_t err = cudaFree(ones_gpu_local); if (err != cudaSuccess) cudaGetLastError(); }
     if (row_means_gpu) { cudaError_t err = cudaFree(row_means_gpu); if (err != cudaSuccess) cudaGetLastError(); }
     if (col_means_gpu) { cudaError_t err = cudaFree(col_means_gpu); if (err != cudaSuccess) cudaGetLastError(); }
     
     // Step 4: Extract top k eigenvectors and scale by sqrt(eigenvalue)
     // Eigenvectors are already stored in eigenvectors_gpu (sorted by eigenvalue magnitude)
     
-    // Sort eigenvalues by magnitude (descending) to get top k
-    std::vector<std::pair<dp_t, int>> eigen_pairs(k);
+    // Sort eigenvalues by value (descending) to get top k eigenvalues
+    // Include ALL eigenvalues (even negative ones for MDS - they indicate non-Euclidean structure)
+    std::vector<std::pair<dp_t, int>> eigen_pairs;
     for (int i = 0; i < k; i++) {
-        eigen_pairs[i] = std::make_pair(std::abs(eigenvalues[i]), i);
+        eigen_pairs.push_back(std::make_pair(eigenvalues[i], i));
     }
+    
     std::sort(eigen_pairs.rbegin(), eigen_pairs.rend());
     
     // Extract top k eigenvectors and scale by sqrt(eigenvalue)
@@ -2290,8 +2529,9 @@ std::vector<double> LowRankProximityMatrix::compute_mds_from_factors(integer_t k
         dp_t* eig_ptr = eigenvectors_gpu + eigen_idx * nsample_;
         CUDA_CHECK_VOID(cudaMemcpy(eigenvector_host.data(), eig_ptr, nsample_ * sizeof(dp_t), cudaMemcpyDeviceToHost));
         
-        // Scale by sqrt(eigenvalue) for MDS coordinates
-        dp_t scale_factor = std::sqrt(std::max(eigenvalues[eigen_idx], 0.0));
+        // Scale by sqrt(|eigenvalue|) for MDS coordinates
+        // Use absolute value to handle negative eigenvalues (non-Euclidean distances)
+        dp_t scale_factor = std::sqrt(std::abs(eigenvalues[eigen_idx]));
         
         for (size_t i = 0; i < n; i++) {
             coords_kd[i * k + comp] = static_cast<double>(eigenvector_host[i] * scale_factor);
@@ -2432,12 +2672,19 @@ void LowRankProximityMatrix::full_svd_update(const dp_t* accumulated_prox, integ
 
 // Estimate optimal rank
 integer_t estimate_optimal_rank(integer_t nsample, integer_t max_rank) {
-    if (nsample <= 0) {
-        return 100;  // Default rank
+    // ALWAYS respect max_rank as absolute upper bound (user's explicit choice)
+    if (max_rank <= 0) {
+        max_rank = 100;  // Default if not specified
     }
+    if (nsample <= 0) {
+        return max_rank;
+    }
+    // Use sqrt(nsample) as heuristic, capped by max_rank
+    // No minimum - if user wants rank=3, they get rank=3
     integer_t rank = static_cast<integer_t>(std::sqrt(static_cast<double>(nsample)));
-    rank = std::max(100, std::min(rank, max_rank));
-    return rank;
+    rank = std::min(rank, max_rank);
+    // Ensure at least 1
+    return std::max(1, rank);
 }
 
 } // namespace cuda

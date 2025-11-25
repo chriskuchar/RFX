@@ -639,7 +639,7 @@ PYBIND11_MODULE(RFX, m) {
                                         bool show_progress = true,
                                         std::string progress_desc = "Training Random Forest",
                                 std::string gpu_loss_function = "gini",  // "gini" for classification, "mse" for regression
-                                int rank = 100,  // Low-rank proximity matrix rank (default: 100)
+                                int rank = 32,  // Low-rank proximity matrix rank (32 preserves 99%+ geometry)
                                 int n_threads_cpu = 0,  // Number of CPU threads for multi-threading (0 = auto-detect)
                                 bool use_rfgap = false,  // Use RF-GAP (Random Forest-Geometry- and Accuracy-Preserving) proximity
                                 std::string importance_method = "local_imp",  // Local importance method: "local_imp" or "clique"
@@ -672,7 +672,6 @@ PYBIND11_MODULE(RFX, m) {
         config_.cutoff = cutoff;
         // Convert loss function string to integer with validation (only Gini or MSE)
         config_.gpu_loss_function = loss_function_string_to_int(gpu_loss_function, config_.task_type, config_.nclass);
-        // Always use original RF growth mode (mode 0)
         // gpu_parallel_mode0 is now automatically set based on batch_size in fit() method
         config_.lowrank_rank = rank;
         config_.n_threads_cpu = n_threads_cpu;
@@ -812,6 +811,26 @@ PYBIND11_MODULE(RFX, m) {
             // Print training message
             py::module_ builtins = py::module_::import("builtins");
             builtins.attr("print")(py::str("Training Random Forest Classifier with {} trees...").format(config_.ntree));
+            
+            // Print batch size info for GPU mode
+            if (config_.use_gpu) {
+                rf::integer_t batch_size_info;
+                std::string batch_mode;
+                if (config_.batch_size > 0) {
+                    batch_size_info = std::min(config_.batch_size, config_.ntree);
+                    batch_mode = "manual";
+                } else {
+                    // Auto batch size: call actual function to get correct value
+                    try {
+                        batch_size_info = rf::cuda::get_recommended_batch_size(config_.ntree);
+                        batch_size_info = std::min(batch_size_info, config_.ntree);
+                    } catch (...) {
+                        batch_size_info = std::min(static_cast<rf::integer_t>(100), config_.ntree);
+                    }
+                    batch_mode = "auto";
+                }
+                builtins.attr("print")(py::str("GPU batch_size={} ({})").format(batch_size_info, batch_mode));
+            }
             
             // Print memory information based on execution mode (CUDA-safe)
             try {
@@ -1255,6 +1274,23 @@ PYBIND11_MODULE(RFX, m) {
             
             std::copy(coords.begin(), coords.end(), static_cast<double*>(coords_buf.ptr));
             
+            // Check for duplicate coordinates (indicates insufficient tree coverage)
+            py::module_ np = py::module_::import("numpy");
+            py::module_ warnings = py::module_::import("warnings");
+            py::array_t<double> rounded = np.attr("round")(coords_array, 6);
+            py::array_t<double> unique_coords = np.attr("unique")(rounded, py::arg("axis")=0);
+            py::ssize_t n_unique = unique_coords.request().shape[0];
+            py::ssize_t n_duplicates = nsamples - n_unique;
+            if (n_duplicates > 0) {
+                double pct_duplicates = (static_cast<double>(n_duplicates) / nsamples) * 100.0;
+                std::string warn_msg = "MDS coordinates have " + std::to_string(n_duplicates) + 
+                    " duplicate points (" + std::to_string(static_cast<int>(pct_duplicates)) + "% of " + 
+                    std::to_string(nsamples) + " samples). Only " + std::to_string(n_unique) + 
+                    " unique positions will be visible. This typically indicates insufficient tree coverage " +
+                    "for proximity computation. Consider increasing ntree (recommend 100+ for stable MDS).";
+                warnings.attr("warn")(warn_msg, py::module_::import("builtins").attr("UserWarning"));
+            }
+            
             return coords_array;
         }
         
@@ -1322,7 +1358,7 @@ PYBIND11_MODULE(RFX, m) {
              py::arg("show_progress") = true,
              py::arg("progress_desc") = "Training Random Forest",
              py::arg("gpu_loss_function") = "gini",  // "gini" for classification
-             py::arg("rank") = 100,  // Low-rank proximity matrix rank (default: 100)
+             py::arg("rank") = 32,  // Low-rank proximity matrix rank (32 preserves 99%+ geometry)
              py::arg("n_threads_cpu") = 0,  // Number of CPU threads (0 = auto-detect)
              py::arg("use_rfgap") = false,  // Use RF-GAP (Random Forest-Geometry- and Accuracy-Preserving) proximity
              py::arg("importance_method") = "local_imp",  // Local importance method: "local_imp" or "clique"
@@ -1365,6 +1401,1365 @@ PYBIND11_MODULE(RFX, m) {
         }, "Explicitly clean up GPU memory. Safe to call multiple times. Useful for Jupyter notebook memory management.");
 
     // RandomForestRegressor class with progress bar
+    class RandomForestRegressor {
+    private:
+        rf::RandomForestConfig config_;  // Store config to allow updates
+        rf::RandomForest* rf_;  // Use raw pointer to avoid shared_ptr destruction issues
+        bool show_progress_;
+        std::string progress_desc_;
+        py::object progress_bar_;  // Store tqdm progress bar object
+        int last_progress_refresh_pos_;  // Track last refresh position for throttling
+        std::string gpu_loss_function_str_;  // Store original loss function string for re-validation
+        
+    public:
+        RandomForestRegressor(int nsample = 1000,
+                                int ntree = 100,
+                                int mdim = 10,
+                                int maxcat = 10,
+                                int mtry = 0,
+                                int maxnode = 0,
+                                int minndsize = 1,
+                                int ncsplit = 25,
+                                int ncmax = 25,
+                                int iseed = 12345,
+                                bool compute_proximity = false,
+                                bool compute_importance = true,
+                                bool compute_local_importance = false,
+                                bool use_gpu = false,
+                                bool use_qlora = false,
+                                std::string quant_mode="nf4",
+                                bool use_sparse = false,
+                                float sparsity_threshold = 1e-6f,
+                                int batch_size = 0,
+                                int nodesize = 5,
+                            float cutoff = 0.01f,
+                            bool show_progress = true,
+                            std::string progress_desc = "Training Random Forest Regressor",
+                            std::string gpu_loss_function = "mse",  // "mse" for regression
+                            int rank = 100,  // Low-rank proximity matrix rank (default: 100)
+                            int n_threads_cpu = 0,  // Number of CPU threads for multi-threading (0 = auto-detect)
+                            bool use_rfgap = false,  // Use RF-GAP (Random Forest-Geometry- and Accuracy-Preserving) proximity
+                            std::string importance_method = "local_imp",  // Local importance method: "local_imp" or "clique"
+                            int clique_M = -1,  // CLIQUE quantile grid size (-1 = auto, positive integer = explicit M)
+                            bool use_casewise = false) {  // Use case-wise calculations (per-sample) vs non-case-wise (aggregated). Non-case-wise follows UC Berkeley standard.
+        
+        config_.task_type = rf::TaskType::REGRESSION;
+        config_.nsample = nsample;
+        config_.ntree = ntree;
+        config_.mdim = mdim;
+        config_.nclass = 1;  // Regression has 1 class
+        config_.maxcat = maxcat;
+        config_.mtry = mtry > 0 ? mtry : static_cast<rf::integer_t>(std::sqrt(static_cast<rf::real_t>(mdim)));
+        config_.maxnode = maxnode > 0 ? maxnode : 2 * nsample + 1;
+        config_.minndsize = minndsize;
+        config_.ncsplit = ncsplit;
+        config_.ncmax = ncmax;
+        config_.iseed = iseed;
+        config_.compute_proximity = compute_proximity;
+        config_.compute_importance = compute_importance;
+        config_.compute_local_importance = compute_local_importance;
+        config_.use_gpu = use_gpu;
+        // execution_mode is deprecated - only use use_gpu
+        config_.execution_mode = use_gpu ? "gpu" : "cpu";  // Set for backward compatibility only
+        config_.use_qlora = use_qlora;
+        config_.quant_mode = quantization_string_to_int(quant_mode);
+        config_.use_sparse = use_sparse;
+        config_.sparsity_threshold = sparsity_threshold;
+        config_.batch_size = batch_size;
+        config_.nodesize = nodesize;
+        config_.cutoff = cutoff;
+        // Convert loss function string to integer with validation (only Gini or MSE)
+        config_.gpu_loss_function = loss_function_string_to_int(gpu_loss_function, config_.task_type, config_.nclass);
+        // gpu_parallel_mode0 is now automatically set based on batch_size in fit() method
+        config_.lowrank_rank = rank;
+        config_.n_threads_cpu = n_threads_cpu;
+        config_.use_rfgap = use_rfgap;
+        config_.importance_method = importance_method;
+        config_.clique_M = clique_M;
+        config_.use_casewise = use_casewise;
+        
+        // Store original string for re-validation in fit()
+        gpu_loss_function_str_ = gpu_loss_function;
+        
+        // Don't create RandomForest yet - will be created in fit() with actual data dimensions
+        rf_ = nullptr;  // Initialize to nullptr
+        show_progress_ = show_progress;
+        progress_desc_ = progress_desc;
+        }
+        
+        // Destructor - safely clean up raw pointer and progress bar
+        // CRITICAL: This must be exception-safe for Jupyter notebooks
+        ~RandomForestRegressor() {
+            // Wrap entire destructor in try-catch to prevent any exceptions from propagating
+            // In Jupyter, exceptions in destructors can cause kernel crashes
+            try {
+                // Clear progress bar reference first (safest operation)
+                try {
+                progress_bar_ = py::none();
+                } catch (...) {
+                    // Ignore - progress bar might already be invalid
+                }
+                
+                // Delete RandomForest object with extra safety
+                if (rf_ != nullptr) {
+                    try {
+                    delete rf_;
+                    } catch (const std::exception& e) {
+                        // Log but don't rethrow - we're in a destructor
+                        // CUDA context might be corrupted in Jupyter
+                    } catch (...) {
+                        // Ignore all other errors during cleanup
+                    }
+                    rf_ = nullptr;  // Always set to nullptr after delete attempt
+                }
+            } catch (...) {
+                // Ultimate safety net - catch absolutely everything
+                // Don't do anything, just ensure pointers are null
+                rf_ = nullptr;
+                try {
+                progress_bar_ = py::none();
+                } catch (...) {
+                    // Ignore
+                }
+            }
+        }
+        
+        void fit(py::array_t<rf::real_t> X, py::array_t<rf::real_t> y, py::array_t<rf::real_t> sample_weight = py::array_t<rf::real_t>()) {
+            // Extract data dimensions from actual data
+            auto X_buf = X.request();
+            auto y_buf = y.request();
+            auto sample_weight_buf = sample_weight.request();
+            
+            if (X_buf.ndim != 2) {
+                throw std::runtime_error("X must be 2-dimensional (samples, features)");
+            }
+            
+            // Get actual data dimensions
+            rf::integer_t actual_nsample = static_cast<rf::integer_t>(X_buf.shape[0]);
+            rf::integer_t actual_mdim = static_cast<rf::integer_t>(X_buf.shape[1]);
+            
+            // Update config with actual dimensions
+            config_.nsample = actual_nsample;
+            config_.mdim = actual_mdim;
+            config_.maxnode = config_.maxnode > 0 ? config_.maxnode : 2 * config_.nsample + 1;
+            if (config_.mtry == 0) {
+                config_.mtry = static_cast<rf::integer_t>(config_.mdim / 3);  // Regression uses mdim/3
+            }
+            
+            // Re-validate loss function (regression always has nclass=1)
+            config_.gpu_loss_function = loss_function_string_to_int(gpu_loss_function_str_, config_.task_type, config_.nclass);
+            
+            // Create or recreate RandomForest with correct dimensions
+            rf_ = new rf::RandomForest(config_);
+            
+            // Print training message
+            py::module_ builtins = py::module_::import("builtins");
+            builtins.attr("print")(py::str("Training Random Forest Regressor with {} trees...").format(config_.ntree));
+            
+            // Print batch size info for GPU mode
+            if (config_.use_gpu) {
+                rf::integer_t batch_size_info;
+                std::string batch_mode;
+                if (config_.batch_size > 0) {
+                    batch_size_info = std::min(config_.batch_size, config_.ntree);
+                    batch_mode = "manual";
+                } else {
+                    try {
+                        batch_size_info = rf::cuda::get_recommended_batch_size(config_.ntree);
+                        batch_size_info = std::min(batch_size_info, config_.ntree);
+                    } catch (...) {
+                        batch_size_info = std::min(static_cast<rf::integer_t>(100), config_.ntree);
+                    }
+                    batch_mode = "auto";
+                }
+                builtins.attr("print")(py::str("GPU batch_size={} ({})").format(batch_size_info, batch_mode));
+            }
+            
+            // Print memory information based on execution mode (CUDA-safe)
+            try {
+                if (config_.use_gpu) {
+                    // GPU mode - print GPU memory safely
+                    py::module_ rf_module = py::module_::import("RFX");
+                    rf_module.attr("print_gpu_memory_status")();
+                } else {
+                    // CPU mode - print CPU memory
+                    try {
+                        py::module_ psutil_module = py::module_::import("psutil");
+                        py::object memory = psutil_module.attr("virtual_memory")();
+                        double total_gb = memory.attr("total").cast<double>() / (1024.0 * 1024.0 * 1024.0);
+                        double available_gb = memory.attr("available").cast<double>() / (1024.0 * 1024.0 * 1024.0);
+                        double used_gb = memory.attr("used").cast<double>() / (1024.0 * 1024.0 * 1024.0);
+                        double percent = memory.attr("percent").cast<double>();
+                        
+                        // Use Python print for proper formatting
+                        py::module_ builtins = py::module_::import("builtins");
+                        builtins.attr("print")("\n💻 CPU MEMORY INFORMATION");
+                        builtins.attr("print")("==================================================");
+                        builtins.attr("print")("📊 System Memory:");
+                        builtins.attr("print")(py::str("   Total: {:.1f} GB").format(total_gb));
+                        builtins.attr("print")(py::str("   Available: {:.1f} GB").format(available_gb));
+                        builtins.attr("print")(py::str("   Used: {:.1f} GB").format(used_gb));
+                        builtins.attr("print")(py::str("   Usage: {:.1f}%").format(percent));
+                        builtins.attr("print")();
+                    } catch (...) {
+                        // psutil not available, skip CPU memory info
+                    }
+                }
+            } catch (...) {
+                // Ignore errors - don't crash if memory info unavailable
+            }
+            
+            if (show_progress_) {
+                // Set up tqdm-style progress bar using Python callback for both CPU and GPU mode
+                // This is safe for Jupyter notebooks with proper throttling
+                try {
+                        // Import regular tqdm (not tqdm.auto) to avoid notebook widget cleanup issues
+                        py::object tqdm_module;
+                        try {
+                            // Use regular tqdm (works in both terminal and Jupyter, avoids widget cleanup issues)
+                            tqdm_module = py::module_::import("tqdm");
+                        } catch (...) {
+                            // tqdm not available, disable progress silently
+                            show_progress_ = false;
+                        }
+                        
+                        if (show_progress_) {
+                        // Get total number of trees from config
+                        rf::integer_t total_trees = config_.ntree;
+                        
+                        // Use regular tqdm (not tqdm.auto) to avoid notebook widget issues
+                        // tqdm.auto can cause cleanup problems in Jupyter
+                        try {
+                            // Try to use regular tqdm (works in both terminal and Jupyter)
+                            // Use iterable with total explicitly set for proper formatting
+                            // Create a range object to iterate over (but we'll update manually)
+                            py::object range_obj = py::module_::import("builtins").attr("range")(py::cast(total_trees));
+                            progress_bar_ = tqdm_module.attr("tqdm")(
+                                range_obj,
+                                py::arg("total") = py::cast(total_trees),  // Explicitly set total
+                                py::arg("desc") = progress_desc_,
+                                py::arg("unit") = "tree",
+                                py::arg("unit_scale") = false,  // Don't scale units (keep "tree" not "Ktree")
+                                py::arg("leave") = false,
+                                py::arg("dynamic_ncols") = true,
+                                py::arg("miniters") = 1,
+                                py::arg("disable") = false,
+                                py::arg("bar_format") = "{desc}: {percentage:3.0f}%|{bar}| {n}/{total} {unit} [{elapsed}<{remaining}, {rate_fmt}]"
+                            );
+                        } catch (...) {
+                            // If tqdm creation fails, disable progress
+                            show_progress_ = false;
+                        }
+                        
+                        if (show_progress_) {
+                            // Force initial display of progress bar
+                            try {
+                                progress_bar_.attr("refresh")();
+                            } catch (...) {
+                                // Ignore refresh errors
+                            }
+                            
+                            // Throttle progress updates to avoid Jupyter IOPub rate limit
+                            // Reset refresh position tracker for this training session
+                            last_progress_refresh_pos_ = 0;
+                            int refresh_interval = std::max(50, static_cast<int>(total_trees / 20)); // Refresh every 5% (much safer)
+                            
+                            // Ultra-safe callback - minimal Python interaction, no refresh unless critical
+                            rf_->set_progress_callback([this, refresh_interval](rf::integer_t current, rf::integer_t total) {
+                                // Wrap everything in try-catch to prevent any crashes
+                                try {
+                                    // Check if progress bar exists and is valid
+                                    if (progress_bar_.is_none()) {
+                                        return;  // Progress bar cleared, skip
+                                    }
+                                    
+                                    // Very minimal update - just update the counter, no refresh
+                                    if (current > last_progress_refresh_pos_) {
+                                        try {
+                                            // Get current position safely
+                                            int current_pos = progress_bar_.attr("n").cast<int>();
+                                            if (current > current_pos) {
+                                                int update_amount = current - current_pos;
+                                                progress_bar_.attr("update")(py::cast(update_amount));
+                                            }
+                                        } catch (...) {
+                                            // Ignore update errors - don't crash
+                                        }
+                                        
+                                        // Only refresh very infrequently to avoid Jupyter crashes
+                                        if (current >= total || (current - last_progress_refresh_pos_ >= refresh_interval)) {
+                                            try {
+                                                progress_bar_.attr("refresh")();
+                                                last_progress_refresh_pos_ = current;
+                                            } catch (...) {
+                                                // Ignore refresh errors - critical to not crash here
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Handle completion
+                                    if (current >= total) {
+                                        try {
+                                            // Final update
+                                            int final_pos = progress_bar_.attr("n").cast<int>();
+                                            if (final_pos < total) {
+                                                progress_bar_.attr("update")(py::cast(total - final_pos));
+                                            }
+                                            // Close and clear
+                                            if (py::hasattr(progress_bar_, "close")) {
+                                                progress_bar_.attr("close")();
+                                            }
+                                            progress_bar_ = py::none();
+                                        } catch (...) {
+                                            // Ignore all errors during cleanup
+                                            progress_bar_ = py::none();
+                                        }
+                                    }
+                                } catch (...) {
+                                    // Ultimate safety net - catch absolutely everything
+                                    // Don't do anything, just return
+                                }
+                            });
+                        }
+                    }
+                } catch (...) {
+                    // If tqdm fails, disable progress silently
+                    show_progress_ = false;
+                }
+            }
+            
+            // Print auto-selected batch size if using GPU with auto-scaling (batch_size=0)
+            if (config_.use_gpu && config_.batch_size == 0 && config_.ntree >= 10) {
+                try {
+                    rf::integer_t recommended_batch = rf::cuda::get_recommended_batch_size(config_.ntree);
+                    recommended_batch = std::min(recommended_batch, config_.ntree);
+                    py::module_ builtins = py::module_::import("builtins");
+                    builtins.attr("print")(py::str("🔧 Auto-scaling: Selected batch size = {} trees (out of {} total)").format(recommended_batch, config_.ntree));
+                } catch (...) {
+                    // Ignore errors - the C++ code will print it anyway via std::cout
+                }
+            }
+            
+            // Call the fit method with actual data
+            rf_->fit(static_cast<rf::real_t*>(X_buf.ptr), 
+                     y_buf.ptr, 
+                     sample_weight_buf.size > 0 ? static_cast<rf::real_t*>(sample_weight_buf.ptr) : nullptr);
+            
+            // Print GPU memory status after training completes (if GPU was used)
+            // Query GPU memory directly using CUDA API (safe after training completes)
+            try {
+                if (config_.use_gpu) {
+                    // GPU mode - query GPU memory directly using CUDA API
+                    // This is safe because training just completed, so CUDA context is active
+                    try {
+#ifdef CUDA_FOUND
+                        size_t free_mem, total_mem;
+                        ::cudaError_t err = ::cudaMemGetInfo(&free_mem, &total_mem);
+                        
+                        if (err == ::cudaSuccess) {
+                            // Successfully queried GPU memory - print it in GB format to match CPU format
+                            size_t used_mem = total_mem - free_mem;
+                            double free_gb = free_mem / (1024.0 * 1024.0 * 1024.0);
+                            double total_gb = total_mem / (1024.0 * 1024.0 * 1024.0);
+                            double used_gb = used_mem / (1024.0 * 1024.0 * 1024.0);
+                            double usage_percent = (used_mem / (double)total_mem) * 100.0;
+                            
+                            py::module_ builtins = py::module_::import("builtins");
+                            builtins.attr("print")("\n🚀 GPU MEMORY STATUS (After Training):");
+                            builtins.attr("print")("==================================================");
+                            builtins.attr("print")(py::str("📊 GPU Memory:"));
+                            builtins.attr("print")(py::str("   Total: {:.1f} GB").format(total_gb));
+                            builtins.attr("print")(py::str("   Available: {:.1f} GB").format(free_gb));
+                            builtins.attr("print")(py::str("   Used: {:.1f} GB").format(used_gb));
+                            builtins.attr("print")(py::str("   Usage: {:.1f}%").format(usage_percent));
+                        }
+                        // If cudaMemGetInfo fails, just silently skip (don't print error messages)
+#endif
+                    } catch (...) {
+                        // Ignore errors - don't crash if memory query fails
+                    }
+                }
+            } catch (...) {
+                // Ignore all errors - don't crash if memory info unavailable
+            }
+            
+            // Close progress bar immediately after training completes to prevent GC issues
+            if (show_progress_ && !progress_bar_.is_none()) {
+                try {
+                    // Progress bar should already be closed by callback, but ensure it's cleared
+                    progress_bar_ = py::none();
+                } catch (...) {
+                    // Ignore any errors
+                    progress_bar_ = py::none();
+                }
+            }
+        }
+        
+        // Delegate all other methods to the underlying RandomForest
+        py::array_t<rf::real_t> predict(py::array_t<rf::real_t> X) {
+            auto X_buf = X.request();
+            py::array_t<rf::real_t> predictions(X_buf.shape[0]);
+            rf_->predict(static_cast<rf::real_t*>(X_buf.ptr), X_buf.shape[0], predictions.mutable_data());
+            return predictions;
+        }
+        
+        rf::real_t get_oob_error() const { return rf_->get_oob_error(); }
+        py::array_t<rf::real_t> feature_importances_() {
+            rf::integer_t mdim = rf_->get_n_features();
+            py::array_t<rf::real_t> importances(mdim);
+            const rf::real_t* imp_ptr = rf_->get_feature_importances();
+            // CRITICAL: Check if pointer is valid before copying
+            // If compute_importance=False, feature_importances_ may be empty
+            if (imp_ptr != nullptr) {
+                std::copy(imp_ptr, imp_ptr + mdim, importances.mutable_data());
+            } else {
+                // If importance was not computed, return zeros
+                std::fill(importances.mutable_data(), importances.mutable_data() + mdim, 0.0f);
+            }
+            return importances;
+        }
+        
+        rf::TaskType get_task_type() const { return rf_->get_task_type(); }
+        rf::integer_t get_n_samples() const { return rf_->get_n_samples(); }
+        rf::integer_t get_n_features() const { return rf_->get_n_features(); }
+        rf::integer_t get_n_classes() const { return rf_->get_n_classes(); }
+        
+        // Add local importance and proximity matrix methods
+        py::array_t<rf::real_t> get_local_importance() {
+            // Get the local importance pointer from C++ and convert to numpy array
+            const rf::real_t* local_imp_ptr = rf_->get_qimpm();
+            rf::integer_t nsamples = rf_->get_n_samples();
+            rf::integer_t mdim = rf_->get_n_features();
+            
+            py::array_t<rf::real_t> result({nsamples, mdim});
+            auto buf = result.request();
+            
+            if (local_imp_ptr) {
+                // Copy from C++ array to Python array
+                std::copy(local_imp_ptr, local_imp_ptr + nsamples * mdim, static_cast<rf::real_t*>(buf.ptr));
+            } else {
+                // Fallback: initialize with zeros if not computed
+                std::fill(static_cast<rf::real_t*>(buf.ptr), 
+                         static_cast<rf::real_t*>(buf.ptr) + nsamples * mdim, 0.0f);
+            }
+            return result;
+        }
+        
+        py::array_t<rf::real_t> get_proximity_matrix() {
+            // Get the proximity matrix pointer and convert to numpy array
+            const rf::dp_t* proximity_ptr = rf_->get_proximity_matrix();
+            rf::integer_t nsamples = rf_->get_n_samples();
+            
+            py::array_t<rf::real_t> result({nsamples, nsamples});
+            auto buf = result.request();
+            
+            if (proximity_ptr) {
+                // CRITICAL WARNING: If proximity_ptr was reconstructed from low-rank factors,
+                // this required O(n²) memory and may have crashed the system for large datasets!
+                // Check if low-rank mode was active (use_qlora=True) - reconstruction is expensive
+                if (rf_->get_compute_proximity()) {
+                    PyErr_WarnEx(PyExc_RuntimeWarning,
+                        "WARNING: get_proximity_matrix() may have reconstructed full matrix from low-rank factors. "
+                        "This requires O(n²) memory and may crash your system for large datasets! "
+                        "For low-rank mode (use_qlora=True), use get_lowrank_factors() or compute_mds_3d_from_factors() instead.",
+                        1);
+                }
+                
+                // Convert from dp_t to real_t
+                // CRITICAL: Copy data immediately while holding reference to model
+                // This ensures the proximity matrix vector is not moved or cleared during copy
+                // Use element-by-element copy with bounds checking to avoid memory corruption
+                rf::real_t* dest = static_cast<rf::real_t*>(buf.ptr);
+                const rf::dp_t* src = proximity_ptr;
+                size_t n_elements = static_cast<size_t>(nsamples) * nsamples;
+                
+                // Copy data immediately while holding reference to model
+                // This ensures the proximity matrix vector is not moved or cleared during copy
+                for (size_t i = 0; i < n_elements; ++i) {
+                    dest[i] = static_cast<rf::real_t>(src[i]);
+                }
+            } else {
+                // Low-rank mode: full matrix not available
+                if (rf_->get_compute_proximity()) {
+                    std::string error_msg = 
+                        "Proximity matrix not available in full form. "
+                        "Low-rank mode is active (use_qlora=True). "
+                        "Full matrix reconstruction would require O(n²) memory and can CRASH your system! "
+                        "Example: 100k samples = ~80 GB (likely to crash!). "
+                        "Proximity is stored in low-rank factors (A and B). "
+                        "Use get_lowrank_factors() or compute_mds_3d_from_factors() instead. "
+                        "Or disable use_qlora=True for smaller datasets that can fit full matrix.";
+                    
+                    if (nsamples > 50000) {
+                        error_msg += " ERROR: Dataset too large (" + std::to_string(nsamples) + 
+                                    " samples) - reconstruction aborted to prevent system crash.";
+                    }
+                    
+                    throw std::runtime_error(error_msg);
+                } else {
+                    // Fallback: initialize with identity matrix if not computed
+                    std::fill(static_cast<rf::real_t*>(buf.ptr), 
+                             static_cast<rf::real_t*>(buf.ptr) + nsamples * nsamples, 0.0f);
+                    // Set diagonal to 1.0
+                    for (rf::integer_t i = 0; i < nsamples; i++) {
+                        static_cast<rf::real_t*>(buf.ptr)[i * nsamples + i] = 1.0f;
+                    }
+                }
+            }
+            
+            return result;
+        }
+        
+        py::tuple get_lowrank_factors() {
+            if (!rf_) throw std::runtime_error("Model must be fitted before calling get_lowrank_factors()");
+            rf::integer_t nsamples = rf_->get_n_samples();
+            rf::dp_t* A_host = nullptr;
+            rf::dp_t* B_host = nullptr;
+            rf::integer_t rank = 0;
+            
+            bool success = rf_->get_lowrank_factors(&A_host, &B_host, &rank);
+            
+            if (!success) {
+                throw std::runtime_error(
+                    "Low-rank factors not available. "
+                    "Either low-rank mode is not active (use_qlora=True required), "
+                    "or factors have not been computed yet."
+                );
+            }
+            
+            // Create numpy arrays from host memory
+            py::array_t<rf::dp_t> A_array(std::vector<py::ssize_t>{nsamples, rank});
+            py::array_t<rf::dp_t> B_array(std::vector<py::ssize_t>{nsamples, rank});
+            
+            auto A_buf = A_array.request();
+            auto B_buf = B_array.request();
+            
+            if (!A_buf.ptr || !B_host) {
+                delete[] A_host;
+                delete[] B_host;
+                throw std::runtime_error("Failed to allocate memory for low-rank factors");
+            }
+            
+            // Copy data
+            size_t factor_size = static_cast<size_t>(nsamples) * rank;
+            std::copy(A_host, A_host + factor_size, static_cast<rf::dp_t*>(A_buf.ptr));
+            std::copy(B_host, B_host + factor_size, static_cast<rf::dp_t*>(B_buf.ptr));
+            
+            // Free host memory
+            delete[] A_host;
+            delete[] B_host;
+            
+            return py::make_tuple(A_array, B_array, rank);
+        }
+        
+        py::array_t<double> compute_mds_3d_cpu() {
+            if (!rf_) throw std::runtime_error("Model must be fitted before calling compute_mds_3d_cpu()");
+            
+            // Get proximity matrix
+            py::array_t<rf::dp_t> prox_array = get_proximity_matrix();
+            if (prox_array.size() == 0) {
+                throw std::runtime_error("Proximity matrix not available. Set compute_proximity=True when fitting.");
+            }
+            
+            auto prox_buf = prox_array.request();
+            rf::dp_t* prox_ptr = static_cast<rf::dp_t*>(prox_buf.ptr);
+            rf::integer_t n_samples = static_cast<rf::integer_t>(std::sqrt(prox_array.size()));
+            
+            // Call C++ CPU MDS implementation (uses LAPACK)
+            // Pass OOB counts for RF-GAP normalization only if RF-GAP is actually enabled
+            // Note: If RF-GAP was computed as full matrix, it's already normalized by |Si| in cpu_proximity_rfgap
+            // But if proximity matrix was reconstructed from low-rank factors (QLoRA), we need to normalize here
+            // Get OOB counts for RF-GAP normalization if available
+            const rf::integer_t* oob_counts = rf_->get_nout_ptr();
+            // Only normalize by OOB counts if RF-GAP is actually enabled
+            // Standard proximity matrices are already normalized and don't need RF-GAP normalization
+            bool use_rfgap = rf_->get_use_rfgap();
+            std::vector<double> coords_3d = rf::compute_mds_3d_cpu(prox_ptr, n_samples, true, oob_counts, use_rfgap);
+            
+            // Convert to numpy array
+            py::array_t<double> result(std::vector<py::ssize_t>{n_samples, 3});
+            auto result_buf = result.request();
+            double* result_ptr = static_cast<double*>(result_buf.ptr);
+            std::copy(coords_3d.begin(), coords_3d.end(), result_ptr);
+            
+            return result;
+        }
+        
+        py::array_t<double> compute_mds_from_factors(rf::integer_t k = 3) {
+            if (!rf_) throw std::runtime_error("Model must be fitted before calling compute_mds_from_factors()");
+            
+            if (k < 1) {
+                throw std::runtime_error("MDS dimension k must be >= 1");
+            }
+            
+            std::vector<double> coords = rf_->compute_mds_from_factors(k);
+            
+            if (coords.empty()) {
+                throw std::runtime_error(
+                    "MDS computation failed. "
+                    "Low-rank factors may not be available (use_qlora=True required), "
+                    "or computation failed."
+                );
+            }
+            
+            rf::integer_t nsamples = rf_->get_n_samples();
+            py::array_t<double> coords_array(std::vector<py::ssize_t>{nsamples, static_cast<py::ssize_t>(k)});
+            auto coords_buf = coords_array.request();
+            
+            std::copy(coords.begin(), coords.end(), static_cast<double*>(coords_buf.ptr));
+            
+            // Check for duplicate coordinates (indicates insufficient tree coverage)
+            py::module_ np = py::module_::import("numpy");
+            py::module_ warnings = py::module_::import("warnings");
+            py::array_t<double> rounded = np.attr("round")(coords_array, 6);
+            py::array_t<double> unique_coords = np.attr("unique")(rounded, py::arg("axis")=0);
+            py::ssize_t n_unique = unique_coords.request().shape[0];
+            py::ssize_t n_duplicates = nsamples - n_unique;
+            if (n_duplicates > 0) {
+                double pct_duplicates = (static_cast<double>(n_duplicates) / nsamples) * 100.0;
+                std::string warn_msg = "MDS coordinates have " + std::to_string(n_duplicates) + 
+                    " duplicate points (" + std::to_string(static_cast<int>(pct_duplicates)) + "% of " + 
+                    std::to_string(nsamples) + " samples). Only " + std::to_string(n_unique) + 
+                    " unique positions will be visible. This typically indicates insufficient tree coverage " +
+                    "for proximity computation. Consider increasing ntree (recommend 100+ for stable MDS).";
+                warnings.attr("warn")(warn_msg, py::module_::import("builtins").attr("UserWarning"));
+            }
+            
+            return coords_array;
+        }
+        
+        py::array_t<double> compute_mds_3d_from_factors() {
+            return compute_mds_from_factors(3);
+        }
+    };
+
+    // Register RandomForestRegressor class
+    py::class_<RandomForestRegressor>(m, "RandomForestRegressor")
+        .def(py::init<int, int, int, int, int, int, int, int, int, int, bool, bool, bool, 
+                      bool, bool, std::string, bool, float, int, int, float, bool, std::string, std::string, int, int, bool, std::string, int, bool>(),
+    py::arg("nsample") = 1000,
+    py::arg("ntree") = 100,
+    py::arg("mdim") = 10,
+    py::arg("maxcat") = 10,
+    py::arg("mtry") = 0,
+    py::arg("maxnode") = 0,
+    py::arg("minndsize") = 1,
+    py::arg("ncsplit") = 25,
+    py::arg("ncmax") = 25,
+    py::arg("iseed") = 12345,
+    py::arg("compute_proximity") = false,
+    py::arg("compute_importance") = true,
+    py::arg("compute_local_importance") = false,
+    py::arg("use_gpu") = false,
+    py::arg("use_qlora") = false,
+    py::arg("quant_mode") = "nf4",
+    py::arg("use_sparse") = false,
+    py::arg("sparsity_threshold") = 1e-6f,
+    py::arg("batch_size") = 0,
+    py::arg("nodesize") = 5,
+    py::arg("cutoff") = 0.01f,
+             py::arg("show_progress") = true,
+             py::arg("progress_desc") = "Training Random Forest Regressor",
+             py::arg("gpu_loss_function") = "mse",  // "mse" for regression
+             py::arg("rank") = 32,  // Low-rank proximity matrix rank (32 preserves 99%+ geometry)
+             py::arg("n_threads_cpu") = 0,  // Number of CPU threads (0 = auto-detect)
+             py::arg("use_rfgap") = false,  // Use RF-GAP (Random Forest-Geometry- and Accuracy-Preserving) proximity
+             py::arg("importance_method") = "local_imp",  // Local importance method: "local_imp" or "clique"
+             py::arg("clique_M") = -1,  // CLIQUE quantile grid size (-1 = auto, positive integer = explicit M)
+             py::arg("use_casewise") = false)  // Use case-wise calculations (bootstrap frequency weighted) vs non-case-wise (simple averaging)
+        .def("fit", [](RandomForestRegressor& self, py::array_t<rf::real_t> X, py::array_t<rf::real_t> y) {
+            return self.fit(X, y, py::array_t<rf::real_t>());
+        })
+        .def("fit", &RandomForestRegressor::fit)
+        .def("predict", &RandomForestRegressor::predict)
+        .def("get_oob_error", &RandomForestRegressor::get_oob_error)
+        .def("feature_importances_", &RandomForestRegressor::feature_importances_)
+        .def("get_task_type", &RandomForestRegressor::get_task_type)
+        .def("get_n_samples", &RandomForestRegressor::get_n_samples)
+        .def("get_n_features", &RandomForestRegressor::get_n_features)
+        .def("get_n_classes", &RandomForestRegressor::get_n_classes)
+        .def("get_local_importance", &RandomForestRegressor::get_local_importance)
+        .def("get_proximity_matrix", &RandomForestRegressor::get_proximity_matrix)
+        .def("compute_proximity_matrix", &RandomForestRegressor::get_proximity_matrix, "Alias for get_proximity_matrix()")
+        .def("get_lowrank_factors", &RandomForestRegressor::get_lowrank_factors)
+        .def("compute_mds_3d_cpu", &RandomForestRegressor::compute_mds_3d_cpu,
+             "Compute 3D MDS coordinates from proximity matrix (CPU implementation, fast C++). "
+             "Returns numpy array of shape (n_samples, 3) with [x, y, z] coordinates. "
+             "Requires compute_proximity=True when fitting.")
+        .def("compute_mds_from_factors", &RandomForestRegressor::compute_mds_from_factors,
+             py::arg("k") = 3,
+             "Compute k-dimensional MDS coordinates from low-rank factors (GPU ONLY, memory efficient). "
+             "Returns numpy array of shape (n_samples, k) with MDS coordinates. "
+             "Requires use_gpu=True and use_qlora=True. For CPU, use compute_mds_3d_cpu() with full proximity matrix.")
+        .def("compute_mds_3d_from_factors", &RandomForestRegressor::compute_mds_3d_from_factors,
+             "Compute 3D MDS coordinates from low-rank factors (GPU ONLY, memory efficient). "
+             "Returns numpy array of shape (n_samples, 3) with [x, y, z] coordinates. "
+             "Requires use_gpu=True and use_qlora=True. For CPU, use compute_mds_3d_cpu() with full proximity matrix.")
+        .def("cleanup", [](RandomForestRegressor& self) {
+            // Explicit cleanup of GPU memory
+            // Safe to call multiple times, idempotent (cuda_cleanup() is idempotent)
+            rf::cuda::cuda_cleanup();
+        }, "Explicitly clean up GPU memory. Safe to call multiple times. Useful for Jupyter notebook memory management.");
+
+    // RandomForestUnsupervised class with progress bar
+    class RandomForestUnsupervised {
+    private:
+        rf::RandomForestConfig config_;  // Store config to allow updates
+        rf::RandomForest* rf_;  // Use raw pointer to avoid shared_ptr destruction issues
+        bool show_progress_;
+        std::string progress_desc_;
+        py::object progress_bar_;  // Store tqdm progress bar object
+        int last_progress_refresh_pos_;  // Track last refresh position for throttling
+        std::string gpu_loss_function_str_;  // Store original loss function string for re-validation
+        
+    public:
+        RandomForestUnsupervised(int nsample = 1000,
+                                int ntree = 100,
+                                int mdim = 10,
+                                int maxcat = 10,
+                                int mtry = 0,
+                                int maxnode = 0,
+                                int minndsize = 1,
+                                int ncsplit = 25,
+                                int ncmax = 25,
+                                int iseed = 12345,
+                               bool compute_proximity = false,
+                                bool compute_importance = true,
+                                bool compute_local_importance = false,
+                                bool use_gpu = false,
+                                bool use_qlora = false,
+                                std::string quant_mode = "nf4",
+                                bool use_sparse = false,
+                                float sparsity_threshold = 1e-6f,
+                                int batch_size = 0,
+                                int nodesize = 5,
+                                float cutoff = 0.01f,
+                               bool show_progress = true,
+                               std::string progress_desc = "Training Random Forest Unsupervised",
+                               rf::UnsupervisedMode unsupervised_mode = rf::UnsupervisedMode::CLASSIFICATION_STYLE,
+                               std::string gpu_loss_function = "gini",  // "gini" (for classification-style), "mse" (for regression-style)
+                               int rank = 100,  // Low-rank proximity matrix rank (default: 100)
+                            int n_threads_cpu = 0,  // Number of CPU threads for multi-threading (0 = auto-detect)
+                            bool use_rfgap = false,  // Use RF-GAP (Random Forest-Geometry- and Accuracy-Preserving) proximity
+                            std::string importance_method = "local_imp",  // Local importance method: "local_imp" or "clique"
+                            int clique_M = -1,  // CLIQUE quantile grid size (-1 = auto, positive integer = explicit M)
+                            bool use_casewise = false) {  // Use case-wise calculations (bootstrap frequency weighted) vs non-case-wise (simple averaging)
+        
+        config_.task_type = rf::TaskType::UNSUPERVISED;
+        config_.nsample = nsample;
+        config_.ntree = ntree;
+        config_.mdim = mdim;
+        config_.nclass = 1;  // Unsupervised has 1 class
+        config_.maxcat = maxcat;
+        // Set mtry based on mode (will be overridden in setup_unsupervised_task if mtry==0)
+        if (mtry > 0) {
+            config_.mtry = mtry;
+        } else {
+            // Set default based on mode (will be finalized in setup_unsupervised_task)
+            config_.mtry = 0;  // Let setup_unsupervised_task determine based on mode
+        }
+        config_.maxnode = maxnode > 0 ? maxnode : 2 * nsample + 1;
+        config_.minndsize = minndsize;
+        config_.ncsplit = ncsplit;
+        config_.ncmax = ncmax;
+        config_.iseed = iseed;
+        config_.compute_proximity = compute_proximity;
+        config_.compute_importance = compute_importance;
+        config_.compute_local_importance = compute_local_importance;
+        config_.use_gpu = use_gpu;
+        // execution_mode is deprecated - only use use_gpu
+        config_.execution_mode = use_gpu ? "gpu" : "cpu";  // Set for backward compatibility only
+        config_.use_qlora = use_qlora;
+        config_.quant_mode = quantization_string_to_int(quant_mode);
+        config_.use_sparse = use_sparse;
+        config_.sparsity_threshold = sparsity_threshold;
+        config_.batch_size = batch_size;
+        config_.nodesize = nodesize;
+        config_.cutoff = cutoff;
+        config_.unsupervised_mode = unsupervised_mode;
+        // Convert loss function string to integer with validation
+        // For unsupervised, we validate based on unsupervised_mode
+        // Classification-style uses classification loss functions, regression-style uses regression loss functions
+        rf::TaskType validation_task_type = (unsupervised_mode == rf::UnsupervisedMode::CLASSIFICATION_STYLE) 
+            ? rf::TaskType::CLASSIFICATION : rf::TaskType::REGRESSION;
+        // Convert loss function string to integer with validation (only Gini or MSE)
+        config_.gpu_loss_function = loss_function_string_to_int(gpu_loss_function, validation_task_type, config_.nclass);
+        // gpu_parallel_mode0 is now automatically set based on batch_size in fit() method
+        config_.lowrank_rank = rank;
+        config_.n_threads_cpu = n_threads_cpu;
+        config_.use_rfgap = use_rfgap;
+        config_.importance_method = importance_method;
+        config_.clique_M = clique_M;
+        config_.use_casewise = use_casewise;
+        
+        // Store original string for re-validation in fit()
+        gpu_loss_function_str_ = gpu_loss_function;
+        
+        // Don't create RandomForest yet - will be created in fit() with actual data dimensions
+        rf_ = nullptr;  // Initialize to nullptr
+        show_progress_ = show_progress;
+        progress_desc_ = progress_desc;
+        }
+        
+        // Destructor - safely clean up raw pointer and progress bar
+        // CRITICAL: This must be exception-safe for Jupyter notebooks
+        ~RandomForestUnsupervised() {
+            // Wrap entire destructor in try-catch to prevent any exceptions from propagating
+            // In Jupyter, exceptions in destructors can cause kernel crashes
+            try {
+                // Clear progress bar reference first (safest operation)
+                try {
+                progress_bar_ = py::none();
+                } catch (...) {
+                    // Ignore - progress bar might already be invalid
+                }
+                
+                // Delete RandomForest object with extra safety
+                if (rf_ != nullptr) {
+                    try {
+                    delete rf_;
+                    } catch (const std::exception& e) {
+                        // Log but don't rethrow - we're in a destructor
+                        // CUDA context might be corrupted in Jupyter
+                    } catch (...) {
+                        // Ignore all other errors during cleanup
+                    }
+                    rf_ = nullptr;  // Always set to nullptr after delete attempt
+                }
+            } catch (...) {
+                // Ultimate safety net - catch absolutely everything
+                // Don't do anything, just ensure pointers are null
+                rf_ = nullptr;
+                try {
+                progress_bar_ = py::none();
+                } catch (...) {
+                    // Ignore
+                }
+            }
+        }
+        
+        void fit(py::array_t<rf::real_t> X, py::array_t<rf::real_t> sample_weight = py::array_t<rf::real_t>()) {
+            // Extract data dimensions from actual data
+            auto X_buf = X.request();
+            auto sample_weight_buf = sample_weight.request();
+            
+            if (X_buf.ndim != 2) {
+                throw std::runtime_error("X must be 2-dimensional (samples, features)");
+            }
+            
+            // Get actual data dimensions
+            rf::integer_t actual_nsample = static_cast<rf::integer_t>(X_buf.shape[0]);
+            rf::integer_t actual_mdim = static_cast<rf::integer_t>(X_buf.shape[1]);
+            
+            // Update config with actual dimensions
+            config_.nsample = actual_nsample;
+            config_.mdim = actual_mdim;
+            config_.maxnode = config_.maxnode > 0 ? config_.maxnode : 2 * config_.nsample + 1;
+            // mtry will be set in setup_unsupervised_task based on unsupervised_mode
+            
+            // Re-validate loss function with actual unsupervised_mode
+            rf::TaskType validation_task_type = (config_.unsupervised_mode == rf::UnsupervisedMode::CLASSIFICATION_STYLE) 
+                ? rf::TaskType::CLASSIFICATION : rf::TaskType::REGRESSION;
+            config_.gpu_loss_function = loss_function_string_to_int(gpu_loss_function_str_, validation_task_type, config_.nclass);
+            
+            // Create or recreate RandomForest with correct dimensions
+            rf_ = new rf::RandomForest(config_);
+            
+            // Print training message
+            py::module_ builtins = py::module_::import("builtins");
+            builtins.attr("print")(py::str("Training Random Forest Unsupervised with {} trees...").format(config_.ntree));
+            
+            // Print batch size info for GPU mode
+            if (config_.use_gpu) {
+                rf::integer_t batch_size_info;
+                std::string batch_mode;
+                if (config_.batch_size > 0) {
+                    batch_size_info = std::min(config_.batch_size, config_.ntree);
+                    batch_mode = "manual";
+                } else {
+                    try {
+                        batch_size_info = rf::cuda::get_recommended_batch_size(config_.ntree);
+                        batch_size_info = std::min(batch_size_info, config_.ntree);
+                    } catch (...) {
+                        batch_size_info = std::min(static_cast<rf::integer_t>(100), config_.ntree);
+                    }
+                    batch_mode = "auto";
+                }
+                builtins.attr("print")(py::str("GPU batch_size={} ({})").format(batch_size_info, batch_mode));
+            }
+            
+            // Print memory information based on execution mode (CUDA-safe)
+            try {
+                if (config_.use_gpu) {
+                    // GPU mode - print GPU memory safely
+                    py::module_ rf_module = py::module_::import("RFX");
+                    rf_module.attr("print_gpu_memory_status")();
+                } else {
+                    // CPU mode - print CPU memory
+                    try {
+                        py::module_ psutil_module = py::module_::import("psutil");
+                        py::object memory = psutil_module.attr("virtual_memory")();
+                        double total_gb = memory.attr("total").cast<double>() / (1024.0 * 1024.0 * 1024.0);
+                        double available_gb = memory.attr("available").cast<double>() / (1024.0 * 1024.0 * 1024.0);
+                        double used_gb = memory.attr("used").cast<double>() / (1024.0 * 1024.0 * 1024.0);
+                        double percent = memory.attr("percent").cast<double>();
+                        
+                        // Use Python print for proper formatting
+                        py::module_ builtins = py::module_::import("builtins");
+                        builtins.attr("print")("\n💻 CPU MEMORY INFORMATION");
+                        builtins.attr("print")("==================================================");
+                        builtins.attr("print")("📊 System Memory:");
+                        builtins.attr("print")(py::str("   Total: {:.1f} GB").format(total_gb));
+                        builtins.attr("print")(py::str("   Available: {:.1f} GB").format(available_gb));
+                        builtins.attr("print")(py::str("   Used: {:.1f} GB").format(used_gb));
+                        builtins.attr("print")(py::str("   Usage: {:.1f}%").format(percent));
+                        builtins.attr("print")();
+                    } catch (...) {
+                        // psutil not available, skip CPU memory info
+                    }
+                }
+            } catch (...) {
+                // Ignore errors - don't crash if memory info unavailable
+            }
+            
+            if (show_progress_) {
+                // Set up tqdm-style progress bar using Python callback for both CPU and GPU mode
+                // This is safe for Jupyter notebooks with proper throttling
+                try {
+                        // Import regular tqdm (not tqdm.auto) to avoid notebook widget cleanup issues
+                        py::object tqdm_module;
+                        try {
+                            // Use regular tqdm (works in both terminal and Jupyter, avoids widget cleanup issues)
+                            tqdm_module = py::module_::import("tqdm");
+                        } catch (...) {
+                            // tqdm not available, disable progress silently
+                            show_progress_ = false;
+                        }
+                        
+                        if (show_progress_) {
+                        // Get total number of trees from config
+                        rf::integer_t total_trees = config_.ntree;
+                        
+                        // Use regular tqdm (not tqdm.auto) to avoid notebook widget issues
+                        // tqdm.auto can cause cleanup problems in Jupyter
+                        try {
+                            // Try to use regular tqdm (works in both terminal and Jupyter)
+                            // Use iterable with total explicitly set for proper formatting
+                            // Create a range object to iterate over (but we'll update manually)
+                            py::object range_obj = py::module_::import("builtins").attr("range")(py::cast(total_trees));
+                            progress_bar_ = tqdm_module.attr("tqdm")(
+                                range_obj,
+                                py::arg("total") = py::cast(total_trees),  // Explicitly set total
+                                py::arg("desc") = progress_desc_,
+                                py::arg("unit") = "tree",
+                                py::arg("unit_scale") = false,  // Don't scale units (keep "tree" not "Ktree")
+                                py::arg("leave") = false,
+                                py::arg("dynamic_ncols") = true,
+                                py::arg("miniters") = 1,
+                                py::arg("disable") = false,
+                                py::arg("bar_format") = "{desc}: {percentage:3.0f}%|{bar}| {n}/{total} {unit} [{elapsed}<{remaining}, {rate_fmt}]"
+                            );
+                        } catch (...) {
+                            // If tqdm creation fails, disable progress
+                            show_progress_ = false;
+                        }
+                        
+                        if (show_progress_) {
+                            // Force initial display of progress bar
+                            try {
+                                progress_bar_.attr("refresh")();
+                            } catch (...) {
+                                // Ignore refresh errors
+                            }
+                            
+                            // Throttle progress updates to avoid Jupyter IOPub rate limit
+                            // Reset refresh position tracker for this training session
+                            last_progress_refresh_pos_ = 0;
+                            int refresh_interval = std::max(50, static_cast<int>(total_trees / 20)); // Refresh every 5% (much safer)
+                            
+                            // Ultra-safe callback - minimal Python interaction, no refresh unless critical
+                            rf_->set_progress_callback([this, refresh_interval](rf::integer_t current, rf::integer_t total) {
+                                // Wrap everything in try-catch to prevent any crashes
+                                try {
+                                    // Check if progress bar exists and is valid
+                                    if (progress_bar_.is_none()) {
+                                        return;  // Progress bar cleared, skip
+                                    }
+                                    
+                                    // Very minimal update - just update the counter, no refresh
+                                    if (current > last_progress_refresh_pos_) {
+                                        try {
+                                            // Get current position safely
+                                            int current_pos = progress_bar_.attr("n").cast<int>();
+                                            if (current > current_pos) {
+                                                int update_amount = current - current_pos;
+                                                progress_bar_.attr("update")(py::cast(update_amount));
+                                            }
+                                        } catch (...) {
+                                            // Ignore update errors - don't crash
+                                        }
+                                        
+                                        // Only refresh very infrequently to avoid Jupyter crashes
+                                        if (current >= total || (current - last_progress_refresh_pos_ >= refresh_interval)) {
+                                            try {
+                                                progress_bar_.attr("refresh")();
+                                                last_progress_refresh_pos_ = current;
+                                            } catch (...) {
+                                                // Ignore refresh errors - critical to not crash here
+                                            }
+                                        }
+                                    }
+                                    
+                                    // Handle completion
+                                    if (current >= total) {
+                                        try {
+                                            // Final update
+                                            int final_pos = progress_bar_.attr("n").cast<int>();
+                                            if (final_pos < total) {
+                                                progress_bar_.attr("update")(py::cast(total - final_pos));
+                                            }
+                                            // Close and clear
+                                            if (py::hasattr(progress_bar_, "close")) {
+                                                progress_bar_.attr("close")();
+                                            }
+                                            progress_bar_ = py::none();
+                                        } catch (...) {
+                                            // Ignore all errors during cleanup
+                                            progress_bar_ = py::none();
+                                        }
+                                    }
+                                } catch (...) {
+                                    // Ultimate safety net - catch absolutely everything
+                                    // Don't do anything, just return
+                                }
+                            });
+                        }
+                    }
+                } catch (...) {
+                    // If tqdm fails, disable progress silently
+                    show_progress_ = false;
+                }
+            }
+            
+            // Print auto-selected batch size if using GPU with auto-scaling (batch_size=0)
+            if (config_.use_gpu && config_.batch_size == 0 && config_.ntree >= 10) {
+                try {
+                    rf::integer_t recommended_batch = rf::cuda::get_recommended_batch_size(config_.ntree);
+                    recommended_batch = std::min(recommended_batch, config_.ntree);
+                    py::module_ builtins = py::module_::import("builtins");
+                    builtins.attr("print")(py::str("🔧 Auto-scaling: Selected batch size = {} trees (out of {} total)").format(recommended_batch, config_.ntree));
+                } catch (...) {
+                    // Ignore errors - the C++ code will print it anyway via std::cout
+                }
+            }
+            
+            // Call fit_unsupervised directly (no y parameter needed)
+            rf_->fit_unsupervised(static_cast<rf::real_t*>(X_buf.ptr), 
+                                 sample_weight_buf.size > 0 ? static_cast<rf::real_t*>(sample_weight_buf.ptr) : nullptr);
+        }
+        
+        // Delegate all other methods to the underlying RandomForest
+        py::array_t<rf::integer_t> predict(py::array_t<rf::real_t> X) {
+            auto X_buf = X.request();
+            py::array_t<rf::integer_t> predictions(X_buf.shape[0]);
+            rf_->predict(static_cast<rf::real_t*>(X_buf.ptr), X_buf.shape[0], predictions.mutable_data());
+            return predictions;
+        }
+        
+        rf::real_t get_oob_error() const { return rf_->get_oob_error(); }
+        py::array_t<rf::real_t> feature_importances_() {
+            rf::integer_t mdim = rf_->get_n_features();
+            py::array_t<rf::real_t> importances(mdim);
+            const rf::real_t* imp_ptr = rf_->get_feature_importances();
+            // CRITICAL: Check if pointer is valid before copying
+            // If compute_importance=False, feature_importances_ may be empty
+            if (imp_ptr != nullptr) {
+                std::copy(imp_ptr, imp_ptr + mdim, importances.mutable_data());
+            } else {
+                // If importance was not computed, return zeros
+                std::fill(importances.mutable_data(), importances.mutable_data() + mdim, 0.0f);
+            }
+            return importances;
+        }
+        
+        rf::TaskType get_task_type() const { return rf_->get_task_type(); }
+        rf::integer_t get_n_samples() const { return rf_->get_n_samples(); }
+        rf::integer_t get_n_features() const { return rf_->get_n_features(); }
+        rf::integer_t get_n_classes() const { return rf_->get_n_classes(); }
+        
+        // Add local importance and proximity matrix methods
+        py::array_t<rf::real_t> get_local_importance() {
+            // Get the local importance pointer from C++ and convert to numpy array
+            const rf::real_t* local_imp_ptr = rf_->get_qimpm();
+            rf::integer_t nsamples = rf_->get_n_samples();
+            rf::integer_t mdim = rf_->get_n_features();
+            
+            py::array_t<rf::real_t> result({nsamples, mdim});
+            auto buf = result.request();
+            
+            if (local_imp_ptr) {
+                // Copy from C++ array to Python array
+                std::copy(local_imp_ptr, local_imp_ptr + nsamples * mdim, static_cast<rf::real_t*>(buf.ptr));
+            } else {
+                // Fallback: initialize with zeros if not computed
+                std::fill(static_cast<rf::real_t*>(buf.ptr), 
+                         static_cast<rf::real_t*>(buf.ptr) + nsamples * mdim, 0.0f);
+            }
+            return result;
+        }
+        
+        py::array_t<rf::real_t> get_proximity_matrix() {
+            // Get the proximity matrix pointer and convert to numpy array
+            const rf::dp_t* proximity_ptr = rf_->get_proximity_matrix();
+            rf::integer_t nsamples = rf_->get_n_samples();
+            
+            py::array_t<rf::real_t> result({nsamples, nsamples});
+            auto buf = result.request();
+            
+            if (proximity_ptr) {
+                // CRITICAL WARNING: If proximity_ptr was reconstructed from low-rank factors,
+                // this required O(n²) memory and may have crashed the system for large datasets!
+                // Check if low-rank mode was active (use_qlora=True) - reconstruction is expensive
+                if (rf_->get_compute_proximity()) {
+                    PyErr_WarnEx(PyExc_RuntimeWarning,
+                        "WARNING: get_proximity_matrix() may have reconstructed full matrix from low-rank factors. "
+                        "This requires O(n²) memory and may crash your system for large datasets! "
+                        "For low-rank mode (use_qlora=True), use get_lowrank_factors() or compute_mds_3d_from_factors() instead.",
+                        1);
+                }
+                
+                // Convert from dp_t to real_t
+                // CRITICAL: Copy data immediately while holding reference to model
+                // This ensures the proximity matrix vector is not moved or cleared during copy
+                // Use element-by-element copy with bounds checking to avoid memory corruption
+                rf::real_t* dest = static_cast<rf::real_t*>(buf.ptr);
+                const rf::dp_t* src = proximity_ptr;
+                size_t n_elements = static_cast<size_t>(nsamples) * nsamples;
+                
+                // Copy data immediately while holding reference to model
+                // This ensures the proximity matrix vector is not moved or cleared during copy
+                for (size_t i = 0; i < n_elements; ++i) {
+                    dest[i] = static_cast<rf::real_t>(src[i]);
+                }
+            } else {
+                // Low-rank mode: full matrix not available
+                if (rf_->get_compute_proximity()) {
+                    std::string error_msg = 
+                        "Proximity matrix not available in full form. "
+                        "Low-rank mode is active (use_qlora=True). "
+                        "Full matrix reconstruction would require O(n²) memory and can CRASH your system! "
+                        "Example: 100k samples = ~80 GB (likely to crash!). "
+                        "Proximity is stored in low-rank factors (A and B). "
+                        "Use get_lowrank_factors() or compute_mds_3d_from_factors() instead. "
+                        "Or disable use_qlora=True for smaller datasets that can fit full matrix.";
+                    
+                    if (nsamples > 50000) {
+                        error_msg += " ERROR: Dataset too large (" + std::to_string(nsamples) + 
+                                    " samples) - reconstruction aborted to prevent system crash.";
+                    }
+                    
+                    throw std::runtime_error(error_msg);
+                } else {
+                    // Fallback: initialize with identity matrix if not computed
+                    std::fill(static_cast<rf::real_t*>(buf.ptr), 
+                             static_cast<rf::real_t*>(buf.ptr) + nsamples * nsamples, 0.0f);
+                    // Set diagonal to 1.0
+                    for (rf::integer_t i = 0; i < nsamples; i++) {
+                        static_cast<rf::real_t*>(buf.ptr)[i * nsamples + i] = 1.0f;
+                    }
+                }
+            }
+            
+            return result;
+        }
+        
+        py::tuple get_lowrank_factors() {
+            if (!rf_) throw std::runtime_error("Model must be fitted before calling get_lowrank_factors()");
+            rf::integer_t nsamples = rf_->get_n_samples();
+            rf::dp_t* A_host = nullptr;
+            rf::dp_t* B_host = nullptr;
+            rf::integer_t rank = 0;
+            
+            bool success = rf_->get_lowrank_factors(&A_host, &B_host, &rank);
+            
+            if (!success) {
+                throw std::runtime_error(
+                    "Low-rank factors not available. "
+                    "Either low-rank mode is not active (use_qlora=True required), "
+                    "or factors have not been computed yet."
+                );
+            }
+            
+            // Create numpy arrays from host memory
+            py::array_t<rf::dp_t> A_array(std::vector<py::ssize_t>{nsamples, rank});
+            py::array_t<rf::dp_t> B_array(std::vector<py::ssize_t>{nsamples, rank});
+            
+            auto A_buf = A_array.request();
+            auto B_buf = B_array.request();
+            
+            if (!A_buf.ptr || !B_host) {
+                delete[] A_host;
+                delete[] B_host;
+                throw std::runtime_error("Failed to allocate memory for low-rank factors");
+            }
+            
+            // Copy data
+            size_t factor_size = static_cast<size_t>(nsamples) * rank;
+            std::copy(A_host, A_host + factor_size, static_cast<rf::dp_t*>(A_buf.ptr));
+            std::copy(B_host, B_host + factor_size, static_cast<rf::dp_t*>(B_buf.ptr));
+            
+            // Free host memory
+            delete[] A_host;
+            delete[] B_host;
+            
+            return py::make_tuple(A_array, B_array, rank);
+        }
+        
+        py::array_t<double> compute_mds_3d_cpu() {
+            if (!rf_) throw std::runtime_error("Model must be fitted before calling compute_mds_3d_cpu()");
+            
+            // Get proximity matrix
+            py::array_t<rf::dp_t> prox_array = get_proximity_matrix();
+            if (prox_array.size() == 0) {
+                throw std::runtime_error("Proximity matrix not available. Set compute_proximity=True when fitting.");
+            }
+            
+            auto prox_buf = prox_array.request();
+            rf::dp_t* prox_ptr = static_cast<rf::dp_t*>(prox_buf.ptr);
+            rf::integer_t n_samples = static_cast<rf::integer_t>(std::sqrt(prox_array.size()));
+            
+            // Call C++ CPU MDS implementation (uses LAPACK)
+            // Pass OOB counts for RF-GAP normalization only if RF-GAP is actually enabled
+            // Note: If RF-GAP was computed as full matrix, it's already normalized by |Si| in cpu_proximity_rfgap
+            // But if proximity matrix was reconstructed from low-rank factors (QLoRA), we need to normalize here
+            // Get OOB counts for RF-GAP normalization if available
+            const rf::integer_t* oob_counts = rf_->get_nout_ptr();
+            // Only normalize by OOB counts if RF-GAP is actually enabled
+            // Standard proximity matrices are already normalized and don't need RF-GAP normalization
+            bool use_rfgap = rf_->get_use_rfgap();
+            std::vector<double> coords_3d = rf::compute_mds_3d_cpu(prox_ptr, n_samples, true, oob_counts, use_rfgap);
+            
+            // Convert to numpy array
+            py::array_t<double> result(std::vector<py::ssize_t>{n_samples, 3});
+            auto result_buf = result.request();
+            double* result_ptr = static_cast<double*>(result_buf.ptr);
+            std::copy(coords_3d.begin(), coords_3d.end(), result_ptr);
+            
+            return result;
+        }
+        
+        py::array_t<double> compute_mds_from_factors(rf::integer_t k = 3) {
+            if (!rf_) throw std::runtime_error("Model must be fitted before calling compute_mds_from_factors()");
+            
+            if (k < 1) {
+                throw std::runtime_error("MDS dimension k must be >= 1");
+            }
+            
+            std::vector<double> coords = rf_->compute_mds_from_factors(k);
+            
+            if (coords.empty()) {
+                throw std::runtime_error(
+                    "MDS computation failed. "
+                    "Low-rank factors may not be available (use_qlora=True required), "
+                    "or computation failed."
+                );
+            }
+            
+            rf::integer_t nsamples = rf_->get_n_samples();
+            py::array_t<double> coords_array(std::vector<py::ssize_t>{nsamples, static_cast<py::ssize_t>(k)});
+            auto coords_buf = coords_array.request();
+            
+            std::copy(coords.begin(), coords.end(), static_cast<double*>(coords_buf.ptr));
+            
+            // Check for duplicate coordinates (indicates insufficient tree coverage)
+            py::module_ np = py::module_::import("numpy");
+            py::module_ warnings = py::module_::import("warnings");
+            py::array_t<double> rounded = np.attr("round")(coords_array, 6);
+            py::array_t<double> unique_coords = np.attr("unique")(rounded, py::arg("axis")=0);
+            py::ssize_t n_unique = unique_coords.request().shape[0];
+            py::ssize_t n_duplicates = nsamples - n_unique;
+            if (n_duplicates > 0) {
+                double pct_duplicates = (static_cast<double>(n_duplicates) / nsamples) * 100.0;
+                std::string warn_msg = "MDS coordinates have " + std::to_string(n_duplicates) + 
+                    " duplicate points (" + std::to_string(static_cast<int>(pct_duplicates)) + "% of " + 
+                    std::to_string(nsamples) + " samples). Only " + std::to_string(n_unique) + 
+                    " unique positions will be visible. This typically indicates insufficient tree coverage " +
+                    "for proximity computation. Consider increasing ntree (recommend 100+ for stable MDS).";
+                warnings.attr("warn")(warn_msg, py::module_::import("builtins").attr("UserWarning"));
+            }
+            
+            return coords_array;
+        }
+        
+        py::array_t<double> compute_mds_3d_from_factors() {
+            return compute_mds_from_factors(3);
+        }
+    };
+
+    // Register RandomForestUnsupervised class
+    py::class_<RandomForestUnsupervised>(m, "RandomForestUnsupervised")
+        .def(py::init<int, int, int, int, int, int, int, int, int, int, bool, bool, bool, 
+                      bool, bool, std::string, bool, float, int, int, float, bool, std::string, rf::UnsupervisedMode, std::string, int, int, bool, std::string, int, bool>(),
+    py::arg("nsample") = 1000,
+    py::arg("ntree") = 100,
+    py::arg("mdim") = 10,
+    py::arg("maxcat") = 10,
+    py::arg("mtry") = 0,
+    py::arg("maxnode") = 0,
+    py::arg("minndsize") = 1,
+    py::arg("ncsplit") = 25,
+    py::arg("ncmax") = 25,
+    py::arg("iseed") = 12345,
+             py::arg("compute_proximity") = false,
+    py::arg("compute_importance") = true,
+    py::arg("compute_local_importance") = false,
+    py::arg("use_gpu") = false,
+    py::arg("use_qlora") = false,
+    py::arg("quant_mode") = "nf4",
+    py::arg("use_sparse") = false,
+    py::arg("sparsity_threshold") = 1e-6f,
+    py::arg("batch_size") = 0,
+    py::arg("nodesize") = 5,
+    py::arg("cutoff") = 0.01f,
+             py::arg("show_progress") = true,
+             py::arg("progress_desc") = "Training Random Forest Unsupervised",
+             py::arg("unsupervised_mode") = rf::UnsupervisedMode::CLASSIFICATION_STYLE,
+             py::arg("gpu_loss_function") = "gini",  // "gini" (for classification-style), "mse" (for regression-style)
+             py::arg("rank") = 32,  // Low-rank proximity matrix rank (32 preserves 99%+ geometry)
+             py::arg("n_threads_cpu") = 0,  // Number of CPU threads (0 = auto-detect)
+             py::arg("use_rfgap") = false,  // Use RF-GAP (Random Forest-Geometry- and Accuracy-Preserving) proximity
+             py::arg("importance_method") = "local_imp",  // Local importance method: "local_imp" or "clique"
+             py::arg("clique_M") = -1,  // CLIQUE quantile grid size (-1 = auto, positive integer = explicit M)
+             py::arg("use_casewise") = false)  // Use case-wise calculations (bootstrap frequency weighted) vs non-case-wise (simple averaging)
+        .def("fit", [](RandomForestUnsupervised& self, py::array_t<rf::real_t> X) {
+            return self.fit(X, py::array_t<rf::real_t>());
+        })
+        .def("fit", &RandomForestUnsupervised::fit)
+        .def("predict", &RandomForestUnsupervised::predict)
+        .def("get_oob_error", &RandomForestUnsupervised::get_oob_error)
+        .def("feature_importances_", &RandomForestUnsupervised::feature_importances_)
+        .def("get_task_type", &RandomForestUnsupervised::get_task_type)
+        .def("get_n_samples", &RandomForestUnsupervised::get_n_samples)
+        .def("get_n_features", &RandomForestUnsupervised::get_n_features)
+        .def("get_n_classes", &RandomForestUnsupervised::get_n_classes)
+        .def("get_local_importance", &RandomForestUnsupervised::get_local_importance)
+        .def("get_proximity_matrix", &RandomForestUnsupervised::get_proximity_matrix)
+        .def("get_lowrank_factors", &RandomForestUnsupervised::get_lowrank_factors)
+        .def("compute_mds_from_factors", &RandomForestUnsupervised::compute_mds_from_factors,
+             py::arg("k") = 3,
+             "Compute k-dimensional MDS coordinates from low-rank factors (GPU ONLY, memory efficient). "
+             "Returns numpy array of shape (n_samples, k) with MDS coordinates. "
+             "Requires use_gpu=True and use_qlora=True. For CPU, use compute_mds_3d_cpu() with full proximity matrix.")
+        .def("compute_mds_3d_from_factors", &RandomForestUnsupervised::compute_mds_3d_from_factors,
+             "Compute 3D MDS coordinates from low-rank factors (GPU ONLY, memory efficient). "
+             "Returns numpy array of shape (n_samples, 3) with [x, y, z] coordinates. "
+             "Requires use_gpu=True and use_qlora=True. For CPU, use compute_mds_3d_cpu() with full proximity matrix.")
+        .def("compute_proximity_matrix", &RandomForestUnsupervised::get_proximity_matrix)  // Alias for compatibility
+        .def("cleanup", [](RandomForestUnsupervised& self) {
+            // Explicit cleanup of GPU memory
+            // Safe to call multiple times, idempotent (cuda_cleanup() is idempotent)
+            rf::cuda::cuda_cleanup();
+        }, "Explicitly clean up GPU memory. Safe to call multiple times. Useful for Jupyter notebook memory management.");
 
     // rfviz visualization function binding - generates 2x2 grid HTML with linked brushing JavaScript
     m.def("rfviz", [](py::object rf_model, py::array_t<rf::real_t> X, py::array_t<rf::real_t> y,
@@ -1444,7 +2839,7 @@ fig = make_subplots(
     specs=[[{"type": "scatter"}, {"type": "scatter"}],
            [{"type": "scatter3d"}, {"type": "heatmap"}]],
     horizontal_spacing=0.12,
-    vertical_spacing=0.15
+    vertical_spacing=0.22
 )
 
 # Color mapping
@@ -1551,8 +2946,16 @@ elif coords_kd.shape[1] == 1:
     coords_3d = np.column_stack([coords_kd, np.zeros(n_samples), np.zeros(n_samples)])
     extra_dims = None
     print(f"   Note: Using 1D MDS, padded to 3D for visualization")
-    else:
+else:
     raise RuntimeError(f"Invalid MDS dimensions: {coords_kd.shape[1]}")
+
+# Check for NaN/inf values in MDS coordinates and warn if any are found
+valid_mask = np.all(np.isfinite(coords_3d), axis=1)
+n_invalid = n_samples - np.sum(valid_mask)
+if n_invalid > 0:
+    print(f"   Warning: {n_invalid} samples have invalid MDS coordinates (NaN/inf) and will not be displayed")
+
+# Note: Duplicate coordinate warning is now handled in compute_mds_from_factors()
 
 # Automatic cluster selection based on WCSS percentage decrease (elbow method)
 auto_select_clusters = (n_clusters is None or n_clusters <= 0)
@@ -2401,13 +3804,7 @@ fig.update_scenes(
                 let lassoPath = [];
                 let isDrawingLasso = false;
                 
-                const toggleSelectionButton = document.createElement('button');
-                toggleSelectionButton.id = 'rfviz-toggle-selection';
-                toggleSelectionButton.innerHTML = '🎯 Enable Lasso Mode';
-                toggleSelectionButton.style.cssText = 'position: fixed; top: 110px; right: 20px; z-index: 10000; ' +
-                    'background-color: #2196F3; color: white; border: none; padding: 12px 24px; ' +
-                    'font-size: 14px; font-weight: bold; border-radius: 5px; cursor: pointer; ' +
-                    'box-shadow: 0 4px 6px rgba(0,0,0,0.3);';
+                // Lasso mode button removed - functionality still works with Ctrl+Alt+Drag
                 
                 // Custom lasso selection for 3D plot - requires Ctrl+Alt+drag
                 function startLasso(event) {
@@ -2567,43 +3964,47 @@ fig.update_scenes(
                     alert('💡 Re-run the auto-load cell in your notebook to load the DataFrame');
                 }
                 
+                // Create a container for buttons (works in Jupyter embedded HTML)
+                // Set plotly container to relative positioning so absolute children work
+                gd.style.position = 'relative';
+                
                 // Create clear button
                 const clearButton = document.createElement('button');
                 clearButton.id = 'rfviz-clear-button';
-                clearButton.innerHTML = '🗑️ Clear Selection';
-                clearButton.style.cssText = 'position: fixed; top: 70px; right: 20px; z-index: 10000; ' +
+                clearButton.innerHTML = 'Clear Selection';
+                clearButton.style.cssText = 'position: absolute; top: 70px; right: 20px; z-index: 10000; ' +
                     'background-color: #f44336; color: white; border: none; padding: 12px 24px; ' +
                     'font-size: 14px; font-weight: bold; border-radius: 5px; cursor: pointer; ' +
                     'box-shadow: 0 4px 6px rgba(0,0,0,0.3);';
                 clearButton.onclick = clearAllSelections;
                 clearButton.title = 'Clear all selections (keyboard: R or Escape)';
-                document.body.appendChild(clearButton);
+                gd.appendChild(clearButton);
                 
                 // Create save button
                 const saveButton = document.createElement('button');
                 saveButton.id = 'rfviz-save-button';
-                saveButton.innerHTML = '💾 Save Selected Subset';
-                saveButton.style.cssText = 'position: fixed; top: 20px; right: 20px; z-index: 10000; ' +
+                saveButton.innerHTML = 'Save Selected Subset';
+                saveButton.style.cssText = 'position: absolute; top: 20px; right: 20px; z-index: 10000; ' +
                     'background-color: #4CAF50; color: white; border: none; padding: 12px 24px; ' +
                     'font-size: 14px; font-weight: bold; border-radius: 5px; cursor: pointer; ' +
                     'box-shadow: 0 4px 6px rgba(0,0,0,0.3);';
                 saveButton.onclick = saveSelectedIndices;
                 saveButton.title = 'Save currently selected sample indices to JSON file';
-                document.body.appendChild(saveButton);
+                gd.appendChild(saveButton);
                 
                 // Create instructions overlay for 3D MDS plot
                 const instructionsDiv = document.createElement('div');
                 instructionsDiv.id = 'rfviz-3d-instructions';
                 instructionsDiv.innerHTML = '<div style="background: rgba(0,0,0,0.8); color: white; padding: 15px; border-radius: 8px; font-size: 12px; line-height: 1.6; max-width: 280px;">' +
-                    '<strong style="color: #4CAF50; font-size: 14px;">📊 3D MDS Plot Instructions:</strong><br>' +
-                    '• <strong>Rotate:</strong> Drag (or Shift+drag)<br>' +
-                    '• <strong>Zoom:</strong> Scroll wheel (works anywhere)<br>' +
-                    '• <strong>Click Select:</strong> Click individual points<br>' +
-                    '• <strong>Pan:</strong> Ctrl + drag<br>' +
-                    '• <strong>Clear:</strong> Press R or Escape<br>' +
-                    '<br><em style="color: #FFC107;">💡 Selections sync across all 4 plots!</em>' +
+                    '<strong style="color: #4CAF50; font-size: 14px;">3D MDS Plot Instructions:</strong><br>' +
+                    '- <strong>Rotate:</strong> Drag (or Shift+drag)<br>' +
+                    '- <strong>Zoom:</strong> Scroll wheel (works anywhere)<br>' +
+                    '- <strong>Click Select:</strong> Click individual points<br>' +
+                    '- <strong>Pan:</strong> Ctrl + drag<br>' +
+                    '- <strong>Clear:</strong> Press R or Escape<br>' +
+                    '<br><em style="color: #FFC107;">Selections sync across all 4 plots!</em>' +
                     '</div>';
-                instructionsDiv.style.cssText = 'position: fixed; bottom: 20px; left: 20px; z-index: 10000; ' +
+                instructionsDiv.style.cssText = 'position: absolute; bottom: 20px; left: 20px; z-index: 10000; ' +
                     'cursor: pointer; transition: opacity 0.3s;';
                 
                 // Make instructions toggleable
@@ -2613,7 +4014,7 @@ fig.update_scenes(
                     instructionsDiv.style.opacity = instructionsVisible ? '1' : '0.3';
                 };
                 
-                document.body.appendChild(instructionsDiv);
+                gd.appendChild(instructionsDiv);
                 
                 // Auto-hide after 10 seconds
                 setTimeout(function() {
@@ -2672,5 +4073,412 @@ fig.update_scenes(
        py::arg("feature_names") = py::none(), py::arg("n_clusters") = py::cast(3),
        py::arg("title") = py::none(), py::arg("output_file") = py::cast("rfviz.html"),
        py::arg("show_in_browser") = py::cast(true), py::arg("save_html") = py::cast(true),
-       py::arg("mds_k") = 3, "Generate interactive 2x2 grid visualization with linked brushing. Creates HTML file with 4 coordinated views: input features parallel coordinates, local importance parallel coordinates, 3D MDS proximity plot, and class votes heatmap.");
+       py::arg("mds_k") = 3,
+       "Create interactive Random Forest visualization with 2x2 grid and linked brushing");
+
+    // GPU memory management utilities for Jupyter notebook safety
+    // Check if CUDA is available
+    m.def("cuda_is_available", []() -> bool {
+        // Wrap in try-catch to prevent crashes in Jupyter
+        try {
+            return rf::cuda::cuda_is_available();
+        } catch (...) {
+            // If any exception occurs, return false safely
+            return false;
+        }
+    }, "Check if CUDA/GPU is available. Returns True if CUDA-capable GPU is detected.");
+
+#ifdef CUDA_FOUND
+    // Check if enough GPU memory available
+    m.def("check_gpu_memory", [](size_t size_mb) -> bool {
+        // Ultra-safe: Only check via our CudaConfig (no direct CUDA runtime calls)
+        // This avoids triggering CUDA initialization that can crash Jupyter kernels
+        try {
+            // Check if CudaConfig has been initialized (means CUDA context exists)
+            if (!rf::cuda::CudaConfig::instance().is_initialized()) {
+                return false;  // Not initialized yet - safe to return false
+            }
+            
+            // If initialized, it's safe to query memory (context exists)
+            size_t available_mb = rf::cuda::CudaConfig::instance().get_available_memory() / (1024 * 1024);
+            return available_mb >= size_mb;
+        } catch (...) {
+            // Catch everything - don't crash
+            return false;
+        }
+    }, py::arg("size_mb"), "Check if enough GPU memory is available (in MB). Returns False if CUDA unavailable or insufficient memory. Safe to call anytime.");
+
+    // Print GPU memory status
+    m.def("print_gpu_memory_status", []() {
+        // Ultra-safe: Only check via our CudaConfig (no direct CUDA runtime calls)
+        // This avoids triggering CUDA initialization that can crash Jupyter kernels
+        try {
+            // Check if CudaConfig has been initialized (means CUDA context exists)
+            bool config_initialized = rf::cuda::CudaConfig::instance().is_initialized();
+            
+            if (!config_initialized) {
+                // Suppress messages when context is not initialized - it's expected after cleanup
+                // Users can check GPU memory manually if needed, but we don't spam them with messages
+                return;
+            }
+            
+            // If initialized, it's safe to query memory (context exists)
+            size_t total_mb = rf::cuda::CudaConfig::instance().get_total_memory() / (1024 * 1024);
+            size_t free_mb = rf::cuda::CudaConfig::instance().get_available_memory() / (1024 * 1024);
+            size_t used_mb = total_mb - free_mb;
+            
+            // Use Python print instead of std::cout to avoid stream conflicts
+            py::module_ builtins = py::module_::import("builtins");
+            builtins.attr("print")("\n🖥️  GPU MEMORY INFORMATION");
+            builtins.attr("print")("==================================================");
+            builtins.attr("print")("📊 GPU Memory:");
+            builtins.attr("print")(py::str("   Total: {} MB").format(total_mb));
+            builtins.attr("print")(py::str("   Available: {} MB").format(free_mb));
+            builtins.attr("print")(py::str("   Used: {} MB").format(used_mb));
+            builtins.attr("print")();
+            } catch (...) {
+            // Catch everything - don't crash, just print a safe message
+            // Use Python print instead of std::cout to avoid stream conflicts
+            py::module_ builtins = py::module_::import("builtins");
+            builtins.attr("print")("GPU memory status unavailable (CUDA context not initialized or error occurred)");
+        }
+    }, "Print current GPU memory usage status (total, used, free in MB). Safe to call anytime.");
+#endif
+
+    // Explicit GPU cleanup function
+    m.def("gpu_cleanup", []() {
+        rf::cuda::cuda_cleanup();
+    }, "Explicitly clean up GPU memory. Safe to call multiple times. Can be used in context managers for Jupyter notebook safety.");
+
+    // Clear GPU cache
+    m.def("clear_gpu_cache", []() {
+        // Clear any cached GPU data and free unused memory
+        rf::cuda::cuda_cleanup();
+        
+        // Note: cudaDeviceReset() too aggressive for notebooks, so just cleanup global state
+    }, "Clear GPU cache and free unused memory. Useful between notebook cells to prevent memory accumulation.");
+
+    // Reset CUDA device (for stuck contexts)
+    m.def("reset_cuda_device", []() {
+            rf::cuda::cuda_reset_device();
+    }, "Forcefully reset CUDA device to free stuck contexts. Use when 'CUDA device busy or unavailable' errors occur.");
+
+    // Load Iris dataset (UCI ML repository)
+    m.def("load_iris", []() -> py::tuple {
+        rf::Dataset dataset = rf::DataLoader::load_iris();
+        py::array_t<rf::real_t> X({dataset.n_samples, dataset.n_features});
+        auto X_buf = X.mutable_unchecked<2>();
+        for (rf::integer_t i = 0; i < dataset.n_samples; ++i) {
+            for (rf::integer_t j = 0; j < dataset.n_features; ++j) {
+                X_buf(i, j) = dataset.X[i * dataset.n_features + j];
+            }
+        }
+        py::array_t<rf::integer_t> y({dataset.n_samples});
+        auto y_buf = y.mutable_unchecked<1>();
+        for (rf::integer_t i = 0; i < dataset.n_samples; ++i) {
+            y_buf(i) = dataset.y_int[i];
+        }
+        return py::make_tuple(X, y);
+    }, "Load Iris dataset (UCI ML repository)",
+       "Returns (X, y) tuple where X is (n_samples, n_features) array and y is (n_samples,) array of class labels");
+
+    // Load Wine dataset (UCI ML repository)
+    m.def("load_wine", []() -> py::tuple {
+        rf::Dataset dataset = rf::DataLoader::load_wine();
+        py::array_t<rf::real_t> X({dataset.n_samples, dataset.n_features});
+        auto X_buf = X.mutable_unchecked<2>();
+        for (rf::integer_t i = 0; i < dataset.n_samples; ++i) {
+            for (rf::integer_t j = 0; j < dataset.n_features; ++j) {
+                X_buf(i, j) = dataset.X[i * dataset.n_features + j];
+            }
+        }
+        py::array_t<rf::integer_t> y({dataset.n_samples});
+        auto y_buf = y.mutable_unchecked<1>();
+        for (rf::integer_t i = 0; i < dataset.n_samples; ++i) {
+            y_buf(i) = dataset.y_int[i];
+        }
+        return py::make_tuple(X, y);
+    }, "Load Wine dataset (UCI ML repository)",
+       "Returns (X, y) tuple where X is (n_samples, n_features) array and y is (n_samples,) array of class labels");
+
+    // Confusion matrix helper
+    m.def("confusion_matrix", [](py::array_t<rf::integer_t> y_true, py::array_t<rf::integer_t> y_pred) -> py::array_t<rf::integer_t> {
+        auto y_true_buf = y_true.unchecked<1>();
+        auto y_pred_buf = y_pred.unchecked<1>();
+        rf::integer_t n_samples = y_true.shape(0);
+        
+        // Find number of classes
+        rf::integer_t n_classes = 0;
+        for (rf::integer_t i = 0; i < n_samples; ++i) {
+            if (y_true_buf(i) >= n_classes) n_classes = y_true_buf(i) + 1;
+            if (y_pred_buf(i) >= n_classes) n_classes = y_pred_buf(i) + 1;
+        }
+        
+        // Create confusion matrix
+        py::array_t<rf::integer_t> conf_mat({n_classes, n_classes});
+        auto conf_buf = conf_mat.mutable_unchecked<2>();
+        for (rf::integer_t i = 0; i < n_classes; ++i) {
+            for (rf::integer_t j = 0; j < n_classes; ++j) {
+                conf_buf(i, j) = 0;
+            }
+        }
+        
+        // Fill confusion matrix
+        for (rf::integer_t i = 0; i < n_samples; ++i) {
+            rf::integer_t true_class = y_true_buf(i);
+            rf::integer_t pred_class = y_pred_buf(i);
+            if (true_class >= 0 && pred_class >= 0) {
+                conf_buf(true_class, pred_class)++;
+            }
+        }
+        
+        return conf_mat;
+    }, "Compute confusion matrix",
+       py::arg("y_true"), py::arg("y_pred"));
+
+    // Classification report is now implemented in pure Python below to avoid
+    // circular import crashes in Jupyter notebooks. See the py::exec section.
+
+    // Version info
+    m.attr("__version__") = "2.0.0";
+    m.attr("__cuda_enabled__") = true;
+    m.attr("__quantization_enabled__") = true;
+    
+    // Import and expose notebook helper functions + enable auto-storage
+    // Following XGBoost pattern: embed helpers directly and auto-enable model preservation
+    // CRITICAL: Wrap in try-catch to prevent module initialization crashes
+    try {
+        // Pass module object to exec context to avoid circular import
+        py::dict exec_globals = py::globals();
+        exec_globals["_rfx_module"] = m;
+        py::exec(R"(
+import sys
+import os
+from pathlib import Path
+import importlib.util
+
+# EMBEDDED NOTEBOOK HELPERS - Auto-storage enabled automatically
+# This follows XGBoost's pattern: models are preserved automatically across cells
+
+# Module-level storage to prevent garbage collection crashes (XGBoost-style)
+_MODEL_STORAGE = []
+
+def store_model(model):
+    """Store a model in module-level storage to prevent garbage collection crashes."""
+    if model not in _MODEL_STORAGE:
+        _MODEL_STORAGE.append(model)
+    return model
+
+def clear_models():
+    """Clear all stored models (use with caution - may trigger crashes)."""
+    _MODEL_STORAGE.clear()
+
+# Pure Python classification_report to avoid circular import crash in Jupyter
+def classification_report(y_true, y_pred):
+    """
+    Generate classification report with precision, recall, F1-score per class.
+    
+    This is a pure Python implementation that avoids the circular import issue
+    that causes kernel crashes in Jupyter notebooks.
+    
+    Args:
+        y_true: Ground truth labels (array-like of integers)
+        y_pred: Predicted labels (array-like of integers)
+    
+    Returns:
+        str: Formatted classification report
+    """
+    import numpy as np
+    
+    y_true = np.asarray(y_true, dtype=np.int32)
+    y_pred = np.asarray(y_pred, dtype=np.int32)
+    
+    # Compute confusion matrix
+    cm = _rfx_module.confusion_matrix(y_true, y_pred)
+    n_classes = cm.shape[0]
+    
+    lines = []
+    lines.append("\nClassification Report:")
+    lines.append("=" * 58)
+    lines.append(f"{'Class':>10s} {'Precision':>12s} {'Recall':>12s} {'F1-Score':>12s} {'Support':>12s}")
+    lines.append("-" * 58)
+    
+    for i in range(n_classes):
+        tp = cm[i, i]
+        fp = cm[:, i].sum() - tp
+        fn = cm[i, :].sum() - tp
+        support = cm[i, :].sum()
+        
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        
+        lines.append(f"{i:>10d} {precision:>12.4f} {recall:>12.4f} {f1:>12.4f} {support:>12d}")
+    
+    lines.append("")
+    return "\n".join(lines)
+
+# Expose classification_report in the module
+_rfx_module.classification_report = classification_report
+
+# Auto-storage: Monkey-patch constructors to auto-store models (XGBoost-style)
+def _enable_auto_storage():
+    """Enable automatic model storage - models preserved across cells automatically."""
+    # Use module object passed from C++ to avoid circular import deadlock
+    rf = _rfx_module
+    
+    # Store original constructors
+    original_classifier_init = rf.RandomForestClassifier.__init__
+    original_regressor_init = rf.RandomForestRegressor.__init__
+    original_unsupervised_init = rf.RandomForestUnsupervised.__init__
+    
+    # Monkey-patch constructors to auto-store models immediately after creation
+    def auto_store_init_classifier(self, *args, **kwargs):
+        # Translate old parameter names to new ones (backward compatibility)
+        if 'gpu_growth_mode' in kwargs:
+            del kwargs['gpu_growth_mode']  # Old parameter removed
+        if 'gpu_parallel_mode0' in kwargs:
+            # gpu_parallel_mode0 is now automatically determined from batch_size, so ignore this parameter
+            del kwargs['gpu_parallel_mode0']
+        result = original_classifier_init(self, *args, **kwargs)
+        store_model(self)  # Auto-store on creation (XGBoost pattern)
+        return result
+    
+    def auto_store_init_regressor(self, *args, **kwargs):
+        # Translate old parameter names to new ones (backward compatibility)
+        if 'gpu_growth_mode' in kwargs:
+            del kwargs['gpu_growth_mode']  # Old parameter removed
+        if 'gpu_parallel_mode0' in kwargs:
+            # gpu_parallel_mode0 is now automatically determined from batch_size, so ignore this parameter
+            del kwargs['gpu_parallel_mode0']
+        result = original_regressor_init(self, *args, **kwargs)
+        store_model(self)  # Auto-store on creation
+        return result
+    
+    def auto_store_init_unsupervised(self, *args, **kwargs):
+        # Translate old parameter names to new ones (backward compatibility)
+        if 'gpu_growth_mode' in kwargs:
+            del kwargs['gpu_growth_mode']  # Old parameter removed
+        if 'gpu_parallel_mode0' in kwargs:
+            # gpu_parallel_mode0 is now automatically determined from batch_size, so ignore this parameter
+            del kwargs['gpu_parallel_mode0']
+        result = original_unsupervised_init(self, *args, **kwargs)
+        store_model(self)  # Auto-store on creation
+        return result
+    
+    # Monkey-patch fit methods to ensure storage after fitting (double-safety)
+    original_classifier_fit = rf.RandomForestClassifier.fit
+    original_regressor_fit = rf.RandomForestRegressor.fit
+    original_unsupervised_fit = rf.RandomForestUnsupervised.fit
+    
+    def auto_store_fit_classifier(self, *args, **kwargs):
+        result = original_classifier_fit(self, *args, **kwargs)
+        store_model(self)  # Ensure stored after fit
+        return result
+    
+    def auto_store_fit_regressor(self, *args, **kwargs):
+        result = original_regressor_fit(self, *args, **kwargs)
+        store_model(self)  # Ensure stored after fit
+        return result
+    
+    def auto_store_fit_unsupervised(self, *args, **kwargs):
+        result = original_unsupervised_fit(self, *args, **kwargs)
+        store_model(self)  # Ensure stored after fit
+        return result
+    
+    # Apply patches
+    rf.RandomForestClassifier.__init__ = auto_store_init_classifier
+    rf.RandomForestRegressor.__init__ = auto_store_init_regressor
+    rf.RandomForestUnsupervised.__init__ = auto_store_init_unsupervised
+    
+    rf.RandomForestClassifier.fit = auto_store_fit_classifier
+    rf.RandomForestRegressor.fit = auto_store_fit_regressor
+    rf.RandomForestUnsupervised.fit = auto_store_fit_unsupervised
+
+# Enable auto-storage immediately (XGBoost-style: automatic model preservation)
+_enable_auto_storage()
+
+# Try to load full notebook helpers if available (for display_rfviz_html, etc.)
+try:
+    import RFX
+    rfx_file = RFX.__file__
+    rfx_dir = os.path.dirname(rfx_file)
+    helpers_path = os.path.join(rfx_dir, 'rfx_notebook_helpers.py')
+    
+    # Try multiple locations
+    if not os.path.exists(helpers_path):
+        parent_dir = os.path.dirname(rfx_dir)
+        helpers_path = os.path.join(parent_dir, 'rfx_notebook_helpers.py')
+    
+    if not os.path.exists(helpers_path):
+        python_dir = os.path.join(os.path.dirname(rfx_dir), 'python')
+        helpers_path = os.path.join(python_dir, 'rfx_notebook_helpers.py')
+    
+    if not os.path.exists(helpers_path):
+        for path in sys.path:
+            test_path = os.path.join(path, 'rfx_notebook_helpers.py')
+            if os.path.exists(test_path):
+                helpers_path = test_path
+                break
+    
+    # If found, import it for additional functions
+    if os.path.exists(helpers_path):
+        spec = importlib.util.spec_from_file_location("rfx_notebook_helpers", helpers_path)
+        nb_helpers = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(nb_helpers)
+        
+        # Expose additional functions if available
+        try:
+            display_rfviz_html = nb_helpers.display_rfviz_html
+            load_rfviz_selection = nb_helpers.load_rfviz_selection
+        except AttributeError:
+            # Functions not available, create dummy ones
+            def display_rfviz_html(*args, **kwargs):
+                raise ImportError("display_rfviz_html requires IPython/pandas. Install for notebook support.")
+            def load_rfviz_selection(*args, **kwargs):
+                raise ImportError("load_rfviz_selection requires IPython/pandas. Install for notebook support.")
+    else:
+        # Create dummy functions
+        def display_rfviz_html(*args, **kwargs):
+            raise ImportError("rfx_notebook_helpers.py not found. Install IPython/pandas for notebook support.")
+        def load_rfviz_selection(*args, **kwargs):
+            raise ImportError("rfx_notebook_helpers.py not found. Install IPython/pandas for notebook support.")
+except Exception as e:
+    # Create dummy functions that raise helpful errors
+    def display_rfviz_html(*args, **kwargs):
+        raise ImportError(f"RFX.notebook_helpers not available: {e}. Install IPython/pandas for notebook support.")
+    def load_rfviz_selection(*args, **kwargs):
+        raise ImportError(f"RFX.notebook_helpers not available: {e}. Install IPython/pandas for notebook support.")
+
+# Auto-storage is now enabled! Models will be automatically preserved across cells (XGBoost-style)
+)", exec_globals);
+    } catch (py::error_already_set& e) {
+        // CRITICAL: Don't let Python errors crash module initialization
+        // Auto-storage is nice-to-have, but module must load even if it fails
+        // Silently continue - models will still work, just without auto-storage
+        e.clear();  // Clear Python error state
+    } catch (const std::exception& e) {
+        // C++ exceptions during Python exec - also safe to ignore
+        // Module will still work without auto-storage
+    } catch (...) {
+        // Any other errors - ignore to prevent module initialization crash
+    }
+        
+        // Make functions available on module by directly exposing them
+        // The Python exec already created them in the module dict, so just expose them
+        try {
+            py::object display_func = m.attr("display_rfviz_html");
+            py::object load_func = m.attr("load_rfviz_selection");
+            
+            m.attr("display_rfviz_html") = display_func;
+            m.attr("load_rfviz_selection") = load_func;
+        } catch (...) {
+        // Functions not available, create dummy functions
+        m.def("display_rfviz_html", [](const std::string&, int = 1900, int = 1500) -> bool {
+            throw std::runtime_error("display_rfviz_html not available. Install IPython/pandas for notebook support.");
+        });
+        m.def("load_rfviz_selection", [](const std::string&) -> py::object {
+            throw std::runtime_error("load_rfviz_selection not available. Install IPython/pandas for notebook support.");
+        });
+    }
 }

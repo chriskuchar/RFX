@@ -228,28 +228,13 @@ int CudaConfig::get_recommended_batch_size(int total_trees) const {
     }
     
     // SM-aware batch sizing: Ensure batch size utilizes SMs effectively
-    // Target: 2-3 blocks per SM for good occupancy (each tree = 1 block)
-    // This is especially important for small datasets where memory is not the bottleneck
-    int target_blocks = num_sms * 2;  // Conservative multiplier (2 blocks per SM)
-    
-    // Debug output to diagnose batch sizing
-    std::cout << "[AUTO-SCALE DEBUG] Available memory: " << (available_memory / (1024*1024*1024)) << " GB" << std::endl;
-    std::cout << "[AUTO-SCALE DEBUG] SM count: " << num_sms << std::endl;
-    std::cout << "[AUTO-SCALE DEBUG] Target blocks (2×SMs): " << target_blocks << std::endl;
-    std::cout << "[AUTO-SCALE DEBUG] Memory-based batch_size: " << optimal_batch_size << std::endl;
-    std::cout << "[AUTO-SCALE DEBUG] Total trees: " << total_trees << std::endl;
+    // Target: 2 blocks per SM for good occupancy (each tree = 1 block)
+    int target_blocks = num_sms * 2;
     
     if (total_trees >= 100 && optimal_batch_size < target_blocks) {
         // Increase batch size to better utilize SMs (memory permitting)
-        // This helps small datasets (like Wine with 178 samples) that have plenty of memory
-        // but poor SM utilization with small batches
-        int old_batch_size = optimal_batch_size;
         optimal_batch_size = std::max(optimal_batch_size, 
                                       std::min(target_blocks, total_trees));
-        std::cout << "[AUTO-SCALE DEBUG] SM-aware adjustment: " << old_batch_size << " → " << optimal_batch_size << std::endl;
-    } else {
-        std::cout << "[AUTO-SCALE DEBUG] No SM-aware adjustment (total_trees=" << total_trees 
-                  << ", optimal_batch_size=" << optimal_batch_size << " >= target=" << target_blocks << ")" << std::endl;
     }
     
     return optimal_batch_size;

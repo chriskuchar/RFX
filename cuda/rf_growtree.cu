@@ -2166,7 +2166,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     cudaError_t copy_err = cudaMemcpy(x_gpu, x, nsample * mdim * sizeof(real_t), cudaMemcpyHostToDevice);
     
     // std::cout << "[GPU_GROWTREE_BATCH] cudaMemcpy complete" << std::endl;
-    std::cout.flush();
+    // std::cout.flush();  // DISABLED - causes Jupyter crash
     if (copy_err != cudaSuccess) {
         // Copy failed - clean up and return
         cudaFree(x_gpu);
@@ -2404,13 +2404,8 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     
     // Matches backup version - no kernel launch error checking
     
-    // std::cout << "DEBUG: Random states kernel launched, about to sync\n";
-    
-    // Matches backup version - no debug output
+    // Ensure random state initialization finishes before bootstrapping
     CUDA_CHECK_VOID(cudaDeviceSynchronize());
-    
-    // std::cout << "[GPU_GROWTREE_BATCH] After random states sync" << std::endl;
-    std::cout.flush();
     
     // Launch bootstrap kernel
     dim3 bootstrap_block_size(256);
@@ -2451,7 +2446,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     integer_t num_allowed_modes = 0;
     
     // std::cout << "[GPU_GROWTREE_BATCH] About to launch gpu_full_tree_kernel, parallel_mode=" << g_config.gpu_parallel_mode0 << std::endl;
-    std::cout.flush();
+    // std::cout.flush();  // DISABLED - causes Jupyter crash
     
     gpu_full_tree_kernel<<<tree_grid_size, tree_block_size>>>(
         num_trees, nsample, mdim, maxnode, nclass,
@@ -2490,8 +2485,8 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     // This must be done while win_all_gpu and nin_all_gpu are still in scope
     // OPTIMIZATION: Skip tnodewt if not needed (non-casewise + no importance)
     // tnodewt is only needed for: (1) casewise OOB weighting, (2) casewise importance
-    // For now, skip GPU tnodewt computation entirely (casewise mode will use CPU fallback)
-    bool need_tnodewt = false;  // TEMPORARILY DISABLED - was: g_config.use_casewise || (avimp_all != nullptr);
+    // DISABLED: GPU tnodewt kernel has bugs - use CPU fallback instead (matches arxiv)
+    bool need_tnodewt = false;  // DISABLED - CPU fallback below works correctly
     if (tnodewt_all != nullptr && need_tnodewt) {
         // Allocate GPU memory for tnodewt (one allocation for all trees)
         real_t* tnodewt_all_gpu = nullptr;
@@ -2503,7 +2498,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         std::vector<integer_t> nin_all_host(num_trees * nsample);
         CUDA_CHECK_VOID(cudaMemcpy(nin_all_host.data(), nin_all_gpu, num_trees * nsample * sizeof(integer_t), cudaMemcpyDeviceToHost));
         
-        // Launch GPU kernel for each tree
+        // Launch GPU kernel for each tree sequentially to avoid hangs
         for (integer_t tree_id = 0; tree_id < num_trees; ++tree_id) {
             integer_t tree_offset = tree_id * maxnode;
             integer_t jinbag_offset = tree_id * nsample;
@@ -2543,11 +2538,12 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                     jinbag_tree_gpu, ninbag,
                     nclass, task_type,
                     tnodewt_tree_gpu);
+                
             }
         }
         
-        // Sync once after all trees
-        CUDA_CHECK_VOID(cudaDeviceSynchronize());
+        // Synchronize once after launching kernels for all trees to ensure completion
+        CUDA_CHECK_VOID(cudaStreamSynchronize(0));
         
         // Copy results back to host
         CUDA_CHECK_VOID(cudaMemcpy(tnodewt_all, tnodewt_all_gpu, num_trees * maxnode * sizeof(real_t), cudaMemcpyDeviceToHost));
@@ -3019,7 +3015,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
             // For classification/unsupervised: accumulate class votes in q_tree
             // Also increment nout_all for OOB samples (needed for normalization)
             
-            // CRITICAL: Compute tnodewt for classification casewise mode (GPU path)
+            // CRITICAL: Compute tnodewt for classification casewise mode (CPU fallback)
             // For classification with casewise=True, tnodewt[node] = mean bootstrap weight of in-bag samples in that node
             std::vector<real_t> tnodewt_tree(maxnode, 0.0f);
             
@@ -3071,11 +3067,14 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                 }
                 
                 // Compute mean weight for each terminal node
+                integer_t nonzero_tnodewt = 0;
                 for (integer_t node = 0; node < nnode_all[tree_id]; ++node) {
                     if (node_sample_count[node] > 0) {
                         tnodewt_tree[node] = node_weight_sum[node] / static_cast<real_t>(node_sample_count[node]);
+                        if (tnodewt_tree[node] > 0.0f) nonzero_tnodewt++;
                     }
                 }
+                
                 
                 // Copy to global tnodewt_all array
                 for (integer_t node = 0; node < maxnode; ++node) {
@@ -3225,7 +3224,8 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         // Call appropriate variable importance function based on task type
         // Use global arrays for local importance accumulation
         auto time_varimp_func_start = std::chrono::high_resolution_clock::now();
-        if (qimp_all != nullptr && qimpm_all != nullptr) {
+        // CRITICAL: Only require qimp_all for importance - qimpm_all is only needed for LOCAL importance
+        if (qimp_all != nullptr) {
             if (task_type == 1) {  // 1=REGRESSION
                 // Use regression-specific importance (MSE-based)
                 // Use the original continuous y values passed as parameter
@@ -3242,6 +3242,9 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                         tnodewt_ptr = tnodewt_all + tree_offset;
                     }
                     
+                    // REGRESSION VARIMP NOT IMPLEMENTED IN THIS RELEASE
+                    throw std::runtime_error("Regression variable importance not supported in this release");
+                    /*
                     // Use temporary arrays per tree (following CPU pattern)
                     // tnodewt_ptr should already be computed above (after tree growing)
                     cpu_varimp_regression(x, nsample, mdim,
@@ -3254,6 +3257,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                                      cat, jvr_temp.data(), nodexvr_temp.data(),
                                      maxcat, nullptr, // catgoleft not used
                                      tnodewt_ptr, nodextr_tree.data());
+                    */
                     
                     // Accumulate into global arrays (following CPU pattern)
                     if (qimp_all != nullptr) {
@@ -3384,11 +3388,10 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         
         auto time_varimp_end = std::chrono::high_resolution_clock::now();
         
-        // CRITICAL: Synchronize after importance computation loop completes
-        // This ensures all GPU operations from gpu_varimp for all trees finish before proceeding
-        // Required for parallel mode to prevent hangs when processing multiple trees
+        // Synchronize after importance computation loop completes
+        // Use stream sync for better Jupyter compatibility
         if (avimp_all != nullptr) {
-            CUDA_CHECK_VOID(cudaDeviceSynchronize());
+            CUDA_CHECK_VOID(cudaStreamSynchronize(0));
         }
     }
     
@@ -3418,6 +3421,68 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                     jtr_tree[n] = nodeclass_all[tree_offset + kt];
                 } else {
                     jtr_tree[n] = 0;
+                }
+            }
+            
+            // CRITICAL: Compute tnodewt for casewise mode (CPU fallback)
+            // This must be done here for OOB vote accumulation to work correctly with casewise
+            std::vector<real_t> tnodewt_tree(maxnode, 0.0f);
+            if (g_config.use_casewise && tnodewt_all != nullptr) {
+                // Count samples and sum weights for each terminal node
+                std::vector<real_t> node_weight_sum(maxnode, 0.0f);
+                std::vector<integer_t> node_sample_count(maxnode, 0);
+                
+                const integer_t* nodestatus_tree = nodestatus_all + tree_offset;
+                const integer_t* bestvar_tree = bestvar_all + tree_offset;
+                const real_t* xbestsplit_tree = xbestsplit_all + tree_offset;
+                const integer_t* treemap_tree = treemap_all + tree_offset * 2;
+                const integer_t* catgoleft_tree = (catgoleft_all != nullptr) ? 
+                    catgoleft_all + tree_id * maxnode * maxcat : nullptr;
+                
+                // For each IN-BAG sample, traverse tree to find terminal node
+                for (integer_t n = 0; n < nsample; ++n) {
+                    if (nin[jinbag_offset + n] > 0) {  // In-bag sample
+                        integer_t current_node = 0;
+                        while (nodestatus_tree[current_node] == 1) {  // While not terminal
+                            integer_t split_var = bestvar_tree[current_node];
+                            bool goes_left = false;
+                            
+                            // Check if categorical
+                            integer_t split_numcat = (cat != nullptr && split_var < mdim) ? cat[split_var] : 1;
+                            if (split_numcat > 1) {  // Categorical
+                                integer_t category_idx = static_cast<integer_t>(x[n * mdim + split_var] + 0.5f);
+                                integer_t catgoleft_offset = current_node * maxcat;
+                                goes_left = (category_idx >= 0 && category_idx < maxcat && 
+                                           catgoleft_tree[catgoleft_offset + category_idx] == 1);
+                            } else {  // Quantitative
+                                real_t split_point = xbestsplit_tree[current_node];
+                                real_t sample_value = x[n * mdim + split_var];
+                                goes_left = (sample_value <= split_point);
+                            }
+                            
+                            current_node = treemap_tree[current_node * 2 + (goes_left ? 0 : 1)];
+                            if (current_node < 0 || current_node >= nnode_all[tree_id]) break;
+                        }
+                        
+                        // Add to terminal node statistics
+                        if (current_node >= 0 && current_node < nnode_all[tree_id] && 
+                            nodestatus_tree[current_node] == -1) {
+                            node_weight_sum[current_node] += static_cast<real_t>(nin[jinbag_offset + n]);
+                            node_sample_count[current_node]++;
+                        }
+                    }
+                }
+                
+                // Compute mean weight for each terminal node
+                for (integer_t node = 0; node < nnode_all[tree_id]; ++node) {
+                    if (node_sample_count[node] > 0) {
+                        tnodewt_tree[node] = node_weight_sum[node] / static_cast<real_t>(node_sample_count[node]);
+                    }
+                }
+                
+                // Copy to global tnodewt_all array
+                for (integer_t node = 0; node < maxnode; ++node) {
+                    tnodewt_all[tree_offset + node] = tnodewt_tree[node];
                 }
             }
             

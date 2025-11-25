@@ -231,11 +231,11 @@ __global__ void gpu_compute_tnodewt_kernel(
             }
             
             if (reaches_node && current_node == node_id) {
-                // Classification: sum win and nin for in-bag samples in this node
-                // This matches CPU exactly: tw += win[sample_idx], tn += nin[sample_idx]
-                rf::real_t weight = (win != nullptr) ? win[sample_idx] : 1.0f;
-                local_sum_win += weight;
-                local_sum_nin += static_cast<rf::real_t>(nin[sample_idx]);
+                // Classification: sum nin and count samples for in-bag samples in this node
+                // This matches CPU exactly: node_weight_sum[node] += nin[n], node_sample_count[node]++
+                // Then tnodewt[node] = node_weight_sum[node] / node_sample_count[node]
+                local_sum_win += static_cast<rf::real_t>(nin[sample_idx]);  // Sum of bootstrap frequencies
+                local_count += 1.0f;  // Count of samples
             }
         }
     }
@@ -268,10 +268,11 @@ __global__ void gpu_compute_tnodewt_kernel(
                 tnodewt[node_id] = 0.0f;
             }
         } else {
-            // Classification: tnodewt = sum(win) / sum(nin) for in-bag samples
-            // This matches CPU exactly: tnodewt[node] = tw / tn where tw=sum(win), tn=sum(nin)
-            if (s_sum_nin[0] > 0.0f) {
-                tnodewt[node_id] = s_sum_win[0] / s_sum_nin[0];
+            // Classification: tnodewt = sum(nin) / count for in-bag samples in terminal node
+            // This matches CPU exactly: tnodewt[node] = node_weight_sum[node] / node_sample_count[node]
+            // where node_weight_sum = sum(nin), node_sample_count = count of samples
+            if (s_count[0] > 0.0f) {
+                tnodewt[node_id] = s_sum_win[0] / s_count[0];
             } else {
                 tnodewt[node_id] = 0.0f;
             }

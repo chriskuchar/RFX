@@ -322,12 +322,17 @@ __global__ void cuda_proximity_upper_triangle_int8_kernel(
     
     for (int sample_n = tid; sample_n < nsample; sample_n += stride) {
         integer_t k = nodexb[sample_n];
+        
+        // CRITICAL: Validate k before using it in ndbegin[k]
+        // Invalid nodexb values (-1) would cause out-of-bounds access
+        if (k < 0 || k >= nterm) continue;
+        
         integer_t nodesize = 0;
         
         // First pass - calculate nodesize
         for (integer_t j = ndbegin[k]; j < ndbegin[k+1]; j++) {
             integer_t kk = npcase[j];
-            if (nin[kk] > 0) {
+            if (kk >= 0 && kk < nsample && nin[kk] > 0) {
                 nodesize += nin[kk];
             }
         }
@@ -336,7 +341,7 @@ __global__ void cuda_proximity_upper_triangle_int8_kernel(
         if (nodesize > 0) {
             for (integer_t j = ndbegin[k]; j < ndbegin[k+1]; j++) {
                 integer_t kk = npcase[j];
-                if (nin[kk] > 0) {  // In-bag samples only
+                if (kk >= 0 && kk < nsample && nin[kk] > 0) {  // In-bag samples only
                     // For upper triangle, we need i <= j
                     // If sample_n <= kk, use (sample_n, kk)
                     // If sample_n > kk, use (kk, sample_n) - swap to get into upper triangle
@@ -1231,24 +1236,104 @@ void gpu_proximity_upper_triangle_int8(
     int device_count;
     cudaGetDeviceCount(&device_count);
     if (device_count == 0) {
-        // Silently return - GPU not available (don't throw exceptions in Jupyter)
         return;
     }
     
-    // Compute upper triangle size
-    size_t upper_triangle_size = (static_cast<size_t>(nsample) * (nsample + 1)) / 2;
+    // Validate inputs
+    if (nnode <= 0 || nodestatus == nullptr || nodextr == nullptr) {
+        return;
+    }
     
-    // Allocate GPU memory
-    integer_t* nodexb_d, *nin_d, *ndbegin_d, *npcase_d;
-    int8_t* prox_upper_int8_d;
+    // =========================================================================
+    // COMPUTE WORKSPACE ARRAYS INTERNALLY (matches FP16 implementation)
+    // =========================================================================
+    std::vector<integer_t> nod_local(nnode);
+    std::vector<integer_t> ncount_local;
+    std::vector<integer_t> ncn_local(nsample);
+    std::vector<integer_t> nodexb_local(nsample);
+    std::vector<integer_t> ndbegin_local;
+    std::vector<integer_t> npcase_local(nsample);
     
-    // Compute nterm first (needed for correct ndbegin size)
+    // Compute nod (terminal node mapping) and nterm
     integer_t nterm = 0;
     for (integer_t k = 0; k < nnode; ++k) {
         if (nodestatus[k] == -1) {
+            nod_local[k] = nterm;
             nterm++;
+        } else {
+            nod_local[k] = -1;
         }
     }
+    
+    if (nterm == 0) {
+        return;  // No terminal nodes
+    }
+    
+    ncount_local.resize(nterm, 0);
+    
+    // Check for any in-bag samples
+    integer_t inbag_count = 0;
+    for (integer_t n = 0; n < nsample; ++n) {
+        if (nin[n] > 0) inbag_count++;
+    }
+    if (inbag_count == 0) {
+        return;  // No in-bag samples
+    }
+    
+    // Compute nodexb and ncount
+    for (integer_t n = 0; n < nsample; ++n) {
+        if (nodextr[n] < 0 || nodextr[n] >= nnode) {
+            nodexb_local[n] = -1;
+            ncn_local[n] = 0;
+            continue;
+        }
+        
+        integer_t k = nod_local[nodextr[n]];
+        if (k >= 0 && k < nterm) {
+            if (nin[n] > 0) {
+                ncount_local[k]++;
+                ncn_local[n] = ncount_local[k];
+            } else {
+                ncn_local[n] = 0;
+            }
+            nodexb_local[n] = k;
+        } else {
+            nodexb_local[n] = -1;
+            ncn_local[n] = 0;
+        }
+    }
+    
+    // Compute ndbegin
+    ndbegin_local.resize(nterm + 1, 0);
+    ndbegin_local[0] = 0;
+    for (integer_t k = 1; k <= nterm; ++k) {
+        integer_t count = (k-1 < nterm) ? ncount_local[k-1] : 0;
+        if (count < 0) count = 0;
+        ndbegin_local[k] = ndbegin_local[k-1] + count;
+    }
+    
+    // Compute npcase
+    for (integer_t n = 0; n < nsample; ++n) {
+        integer_t k = nodexb_local[n];
+        if (k >= 0 && k < nterm) {
+            integer_t idx = ndbegin_local[k] + ncn_local[n] - 1;
+            if (idx >= 0 && idx < nsample) {
+                npcase_local[idx] = n;
+            }
+        }
+    }
+    
+    // =========================================================================
+    // GPU COMPUTATION
+    // =========================================================================
+    size_t upper_triangle_size = (static_cast<size_t>(nsample) * (nsample + 1)) / 2;
+    
+    // Allocate GPU memory
+    integer_t* nodexb_d = nullptr;
+    integer_t* nin_d = nullptr;
+    integer_t* ndbegin_d = nullptr;
+    integer_t* npcase_d = nullptr;
+    int8_t* prox_upper_int8_d = nullptr;
     
     CUDA_CHECK_VOID(cudaMalloc(&prox_upper_int8_d, upper_triangle_size * sizeof(int8_t)));
     CUDA_CHECK_VOID(cudaMalloc(&nodexb_d, nsample * sizeof(integer_t)));
@@ -1259,11 +1344,11 @@ void gpu_proximity_upper_triangle_int8(
     // Initialize proximity matrix to zero
     CUDA_CHECK_VOID(cudaMemset(prox_upper_int8_d, 0, upper_triangle_size * sizeof(int8_t)));
     
-    // Copy data to GPU
-    CUDA_CHECK_VOID(cudaMemcpy(nodexb_d, nodexb, nsample * sizeof(integer_t), cudaMemcpyHostToDevice));
+    // Copy computed workspace arrays to GPU
+    CUDA_CHECK_VOID(cudaMemcpy(nodexb_d, nodexb_local.data(), nsample * sizeof(integer_t), cudaMemcpyHostToDevice));
     CUDA_CHECK_VOID(cudaMemcpy(nin_d, nin, nsample * sizeof(integer_t), cudaMemcpyHostToDevice));
-    CUDA_CHECK_VOID(cudaMemcpy(ndbegin_d, ndbegin, (nterm + 1) * sizeof(integer_t), cudaMemcpyHostToDevice));
-    CUDA_CHECK_VOID(cudaMemcpy(npcase_d, npcase, nsample * sizeof(integer_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK_VOID(cudaMemcpy(ndbegin_d, ndbegin_local.data(), (nterm + 1) * sizeof(integer_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK_VOID(cudaMemcpy(npcase_d, npcase_local.data(), nsample * sizeof(integer_t), cudaMemcpyHostToDevice));
     
     // Launch kernel
     dim3 block_size(256);
@@ -1273,7 +1358,7 @@ void gpu_proximity_upper_triangle_int8(
         nodexb_d, nin_d, nsample, nterm, ndbegin_d, npcase_d, prox_upper_int8_d, scale, zero_point
     );
     
-    CUDA_CHECK_VOID(cudaStreamSynchronize(0));  // Use stream sync for Jupyter safety
+    CUDA_CHECK_VOID(cudaStreamSynchronize(0));
     
     // Check if output pointer is on GPU or CPU
     cudaPointerAttributes out_attrs;
@@ -1281,15 +1366,12 @@ void gpu_proximity_upper_triangle_int8(
     bool out_is_gpu = (out_check == cudaSuccess && out_attrs.type == cudaMemoryTypeDevice);
     
     if (out_is_gpu) {
-        // Output is on GPU - copy from temp GPU buffer to output GPU pointer
         CUDA_CHECK_VOID(cudaMemcpy(prox_upper_int8, prox_upper_int8_d, upper_triangle_size * sizeof(int8_t), cudaMemcpyDeviceToDevice));
     } else {
-        // Output is on CPU - copy from GPU to host
-    CUDA_CHECK_VOID(cudaMemcpy(prox_upper_int8, prox_upper_int8_d, upper_triangle_size * sizeof(int8_t), cudaMemcpyDeviceToHost));
+        CUDA_CHECK_VOID(cudaMemcpy(prox_upper_int8, prox_upper_int8_d, upper_triangle_size * sizeof(int8_t), cudaMemcpyDeviceToHost));
     }
     
     // Cleanup
-    // Safe free to prevent segfaults
     if (prox_upper_int8_d) { cudaError_t err = cudaFree(prox_upper_int8_d); if (err != cudaSuccess) cudaGetLastError(); }
     if (nodexb_d) { cudaError_t err = cudaFree(nodexb_d); if (err != cudaSuccess) cudaGetLastError(); }
     if (nin_d) { cudaError_t err = cudaFree(nin_d); if (err != cudaSuccess) cudaGetLastError(); }

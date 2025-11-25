@@ -120,6 +120,7 @@ void QuantizationUtils::compute_int8_scaling(const float* data, size_t count,
 
 // GPU version that computes min/max on GPU and stores results in device memory
 // CRITICAL: This function avoids ALL host copies - everything stays on device
+// OPTIMIZATION: Uses persistent static buffers to avoid allocation/sync overhead per call
 void QuantizationUtils::compute_int8_scaling_gpu(const dp_t* data_gpu, size_t count, 
                                                  float* d_scale, float* d_zero_point) {
     if (count == 0) {
@@ -135,29 +136,47 @@ void QuantizationUtils::compute_int8_scaling_gpu(const dp_t* data_gpu, size_t co
     const int block_size = 256;
     int num_blocks = (count + block_size - 1) / block_size;
     
-    // Allocate device memory for block results
-    float* d_min_blocks;
-    float* d_max_blocks;
-    CUDA_CHECK_VOID(cudaMalloc(&d_min_blocks, num_blocks * sizeof(float)));
-    CUDA_CHECK_VOID(cudaMalloc(&d_max_blocks, num_blocks * sizeof(float)));
+    // OPTIMIZATION: Use persistent static buffers to avoid allocation/free overhead
+    // These buffers persist across calls, eliminating need for sync before free
+    thread_local struct ScalingBuffers {
+        float* d_min_blocks = nullptr;
+        float* d_max_blocks = nullptr;
+        float* d_min_final = nullptr;
+        float* d_max_final = nullptr;
+        int allocated_blocks = 0;
+        
+        void ensure_allocated(int num_blocks) {
+            if (num_blocks > allocated_blocks) {
+                // Need to reallocate - free old buffers first
+                if (d_min_blocks) cudaFree(d_min_blocks);
+                if (d_max_blocks) cudaFree(d_max_blocks);
+                if (d_min_final) cudaFree(d_min_final);
+                if (d_max_final) cudaFree(d_max_final);
+                
+                // Allocate with some headroom to avoid frequent reallocation
+                int alloc_blocks = std::max(num_blocks, 256);
+                cudaMalloc(&d_min_blocks, alloc_blocks * sizeof(float));
+                cudaMalloc(&d_max_blocks, alloc_blocks * sizeof(float));
+                cudaMalloc(&d_min_final, sizeof(float));
+                cudaMalloc(&d_max_final, sizeof(float));
+                allocated_blocks = alloc_blocks;
+            }
+        }
+    } buffers;
     
-    // Allocate device memory for final min/max
-    float* d_min_final;
-    float* d_max_final;
-    CUDA_CHECK_VOID(cudaMalloc(&d_min_final, sizeof(float)));
-    CUDA_CHECK_VOID(cudaMalloc(&d_max_final, sizeof(float)));
+    buffers.ensure_allocated(num_blocks);
     
     // Launch first-stage kernel with shared memory
     size_t shared_mem = 2 * block_size * sizeof(float);
     compute_minmax_kernel<<<num_blocks, block_size, shared_mem>>>(
-        data_gpu, count, d_min_blocks, d_max_blocks
+        data_gpu, count, buffers.d_min_blocks, buffers.d_max_blocks
     );
     
     // Launch second-stage reduction kernel (single block)
     int final_block_size = 256;
     size_t final_shared_mem = 2 * final_block_size * sizeof(float);
     reduce_minmax_final_kernel<<<1, final_block_size, final_shared_mem>>>(
-        d_min_blocks, d_max_blocks, num_blocks, d_min_final, d_max_final
+        buffers.d_min_blocks, buffers.d_max_blocks, num_blocks, buffers.d_min_final, buffers.d_max_final
     );
     
     // Compute scale and zero_point on device using a kernel
@@ -165,14 +184,11 @@ void QuantizationUtils::compute_int8_scaling_gpu(const dp_t* data_gpu, size_t co
     dim3 scale_block(1);
     dim3 scale_grid(1);
     compute_scale_from_minmax_kernel<<<scale_grid, scale_block>>>(
-        d_min_final, d_max_final, d_scale, d_zero_point
+        buffers.d_min_final, buffers.d_max_final, d_scale, d_zero_point
     );
     
-    // Cleanup intermediate buffers (async, won't block)
-    cudaFree(d_min_blocks);
-    cudaFree(d_max_blocks);
-    cudaFree(d_min_final);
-    cudaFree(d_max_final);
+    // NO SYNC NEEDED: Buffers are persistent and not freed
+    // They will be reused on next call, so kernel can complete asynchronously
 }
 
 // FP16 Proximity Kernel (existing implementation)
