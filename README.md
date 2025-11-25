@@ -599,15 +599,15 @@ QLORA uses low-rank approximation ($P \approx AB^T$) which is updated in round-r
 - **Without QLORA**: Full 178×178 matrix (247 KB) → 100% perfect MDS quality
 
 **For large datasets**, QLORA is essential:
+
 - **100K samples**: Full matrix = 74.5 GB (impossible!) vs. rank-100 QLORA = 19 MB (4000× compression)
 - **200K samples**: Full matrix = 298 GB (impossible!) vs. rank-100 QLORA = 38 MB (8000× compression)
 
 **Choosing rank for QLORA:**
 
-```python
-# Rule of thumb: rank ≈ ntree (so each column sees 1 tree)
-# But capped at 100-200 for memory efficiency
+**Rule of thumb:** `rank ≈ ntree` (so each column sees 1 tree), but capped at 100-200 for memory efficiency.
 
+```python
 if n_samples >= 50000:
     rank = min(100, ntree)  # 100K samples: rank=100 → 19 MB
 elif n_samples >= 20000:
@@ -616,6 +616,13 @@ else:
     # Don't use QLORA - full matrix is small enough
     use_qlora = False
 ```
+
+**Note:** Even `rank=32` produces excellent results (as shown in the Covertype 10K example above), achieving 100% unique MDS points with just 50+ trees. Use higher ranks (100-200) for maximum fidelity on very large datasets, but rank=32 is sufficient for most use cases.
+
+**Why this rule?**
+- **Rank ≈ ntree**: Each column in the low-rank factors corresponds to approximately one tree's contribution, preserving signal fidelity
+- **Cap at 100-200**: Beyond this, memory savings diminish while computational cost increases
+- **Sample-size thresholds**: Balance between memory efficiency and approximation quality
 
 **Covertype 10K Example (QLORA Showcase):**
 
@@ -627,7 +634,7 @@ With high-precision accumulation (FP64) + final INT8 quantization, QLORA achieve
 | 500 | ~3 min | 100% | 10,000/10,000 (100%) | Excellent |
 
 - **Memory**: 0.7 GB (full matrix) → **0.6 MB** (QLORA INT8, rank=32) = **1200× compression**
-- **Key insight**: Just 50 trees (0.5% of n_samples) achieves 100% MDS coverage!
+- **Key insight**: Just 50 trees (0.5% of n_samples) achieves 100% MDS coverage! Note: While 100% coverage is achieved with minimal trees, running proximity for many trees (500-1000+) provides better estimates of sample similarity, as each tree contributes additional information to the proximity matrix.
 - **See**: `examples/qlora_covertype_mds_demo.py` for interactive 3D MDS plots
 
 ## Performance
@@ -647,17 +654,18 @@ With high-precision accumulation (FP64) + final INT8 quantization, QLORA achieve
 ### Speed Benchmarks
 
 **Wine Dataset (178 samples, 500 trees):**
-- Training: 0.3s (1,446 trees/sec on GPU)
+- **GPU**: Training: 0.3s (1,446 trees/sec)
+- **CPU**: Training: ~2.5s (200 trees/sec)
 - Overall Importance: Included in training
 - OOB Error: Real-time during training
 
 **Covertype Dataset (10K samples, QLORA rank=32):**
-- 50 trees: ~23s (2.2 trees/sec on GPU)
-- 500 trees: ~3 min (2.8 trees/sec on GPU)
+- **GPU**: 50 trees: ~23s (2.2 trees/sec), 500 trees: ~3 min (2.8 trees/sec)
+- **CPU**: 50 trees: ~45s (1.1 trees/sec), 500 trees: ~8 min (1.0 trees/sec)
 - Memory: 0.6 MB (vs 0.7 GB full matrix, 1200× compression)
 - MDS Quality: 100% unique points with 50+ trees
 
-**Note**: GPU performance scales with dataset size and tree count. QLORA enables proximity analysis on datasets that would otherwise require hundreds of GB of memory.
+**Note**: GPU performance scales with dataset size and tree count, typically achieving 2-3× speedup over CPU. QLORA enables proximity analysis on datasets that would otherwise require hundreds of GB of memory.
 
 ## Examples
 
