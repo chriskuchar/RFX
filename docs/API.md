@@ -17,14 +17,16 @@ Complete API documentation for RFX: GPU-Accelerated Random Forests with QLoRA Co
 
 ```python
 rf.RandomForestClassifier(
+    nsample=None,              # Set automatically during fit
     ntree=100,
-    mtry=0,
-    nsample=1000,
-    nclass=2,
+    mdim=None,                 # Set automatically during fit
+    nclass=None,               # Set automatically during fit
     maxcat=10,
+    mtry=0,
     maxnode=0,
     minndsize=1,
-    nodesize=5,
+    ncsplit=25,                # Max categorical splits per node
+    ncmax=25,                  # Max categories to consider
     iseed=12345,
     compute_proximity=False,
     compute_importance=True,
@@ -32,12 +34,17 @@ rf.RandomForestClassifier(
     use_gpu=False,
     use_qlora=False,
     quant_mode="nf4",
-    rank=32,
+    use_sparse=False,
+    sparsity_threshold=1e-6,
     batch_size=0,
-    use_casewise=False,
-    use_rfgap=False,
+    nodesize=5,
+    cutoff=0.01,
+    show_progress=True,
+    progress_desc="Training Random Forest",
+    gpu_loss_function="gini",
+    rank=32,
     n_threads_cpu=0,
-    show_progress=True
+    use_casewise=False
 )
 ```
 
@@ -45,14 +52,16 @@ rf.RandomForestClassifier(
 
 | Parameter | Type | Default | Description |
 |:----------|:-----|:--------|:------------|
+| `nsample` | int | 1000 | Number of samples (set automatically from data during fit) |
 | `ntree` | int | 100 | Number of trees in the forest |
-| `mtry` | int | 0 | Features to consider at each split. 0 = auto (sqrt(n_features)) |
-| `nsample` | int | 1000 | Number of samples (set automatically from data) |
-| `nclass` | int | 2 | Number of classes (set automatically from data) |
+| `mdim` | int | - | Number of features (set automatically from data during fit) |
+| `nclass` | int | 2 | Number of classes (set automatically from data during fit) |
 | `maxcat` | int | 10 | Maximum categories for categorical variables |
+| `mtry` | int | 0 | Features to consider at each split. 0 = auto (sqrt(n_features)) |
 | `maxnode` | int | 0 | Maximum nodes per tree. 0 = unlimited |
 | `minndsize` | int | 1 | Minimum node size for splitting |
-| `nodesize` | int | 5 | Minimum terminal node size |
+| `ncsplit` | int | 25 | Maximum categorical splits per node |
+| `ncmax` | int | 25 | Maximum categories to consider for splitting |
 | `iseed` | int | 12345 | Random seed for reproducibility |
 | `compute_proximity` | bool | False | Compute sample proximity matrix |
 | `compute_importance` | bool | True | Compute overall feature importance |
@@ -60,12 +69,17 @@ rf.RandomForestClassifier(
 | `use_gpu` | bool | False | Enable CUDA GPU acceleration |
 | `use_qlora` | bool | False | Enable QLoRA low-rank proximity compression |
 | `quant_mode` | str | "nf4" | Quantization mode: "int8", "nf4", "fp16", "fp32" |
-| `rank` | int | 32 | Low-rank dimension for QLoRA compression |
+| `use_sparse` | bool | False | Enable CPU block-sparse (TriBlock) proximity |
+| `sparsity_threshold` | float | 1e-6 | Block-sparse threshold for CPU proximity |
 | `batch_size` | int | 0 | GPU batch size. 0 = auto |
-| `use_casewise` | bool | False | Use case-wise (bootstrap frequency) weighting |
-| `use_rfgap` | bool | False | Use RF-GAP proximity normalization |
-| `n_threads_cpu` | int | 0 | CPU threads. 0 = auto |
+| `nodesize` | int | 5 | Minimum terminal node size |
+| `cutoff` | float | 0.01 | Cutoff threshold for node splitting |
 | `show_progress` | bool | True | Show training progress bar |
+| `progress_desc` | str | "Training Random Forest" | Progress bar description |
+| `gpu_loss_function` | str | "gini" | GPU loss function ("gini" for classification) |
+| `rank` | int | 32 | Low-rank dimension for QLoRA compression |
+| `n_threads_cpu` | int | 0 | CPU threads. 0 = auto |
+| `use_casewise` | bool | False | Use case-wise (bootstrap frequency) weighting |
 
 ### Methods
 
@@ -99,6 +113,25 @@ predictions = model.predict(X)
 | `X` | array-like | Features, shape (n_samples, n_features) |
 
 **Returns:** ndarray of shape (n_samples,) with predicted class labels
+
+---
+
+#### predict_proba(X)
+
+Predict class probabilities for samples.
+
+```python
+probabilities = model.predict_proba(X)
+# probabilities[i, j] = probability that sample i belongs to class j
+```
+
+| Parameter | Type | Description |
+|:----------|:-----|:------------|
+| `X` | array-like | Features, shape (n_samples, n_features) |
+
+**Returns:** ndarray of shape (n_samples, n_classes) with class probabilities
+
+**Note:** Probabilities are computed as the fraction of trees voting for each class.
 
 ---
 
@@ -158,22 +191,30 @@ prox = model.get_proximity_matrix()
 
 ---
 
-#### compute_mds_from_factors(k=3)
+#### compute_proximity_matrix()
 
-Compute MDS coordinates directly from low-rank factors.
+Alias for `get_proximity_matrix()` (for compatibility).
 
 ```python
-mds = model.compute_mds_from_factors(k=3)
+prox = model.compute_proximity_matrix()
+```
+
+**Returns:** ndarray of shape (n_samples, n_samples)
+
+---
+
+#### compute_mds_3d_from_factors()
+
+Compute 3D MDS coordinates directly from low-rank factors.
+
+```python
+mds = model.compute_mds_3d_from_factors()
 # mds[i, :] = [x, y, z] coordinates for sample i
 ```
 
-| Parameter | Type | Default | Description |
-|:----------|:-----|:--------|:------------|
-| `k` | int | 3 | Number of MDS dimensions |
+**Returns:** ndarray of shape (n_samples, 3)
 
-**Returns:** ndarray of shape (n_samples, k)
-
-**Note:** Only available when `use_qlora=True`.
+**Note:** Only available when `use_qlora=True` and `compute_proximity=True`.
 
 ---
 
@@ -193,40 +234,116 @@ A, B, rank = model.get_lowrank_factors()
 
 ---
 
-#### confusion_matrix(y_true, y_pred)
+#### compute_mds_3d_cpu()
 
-Compute confusion matrix.
+Compute 3D MDS coordinates from full proximity matrix (CPU implementation).
 
 ```python
-cm = model.confusion_matrix(y_true, y_pred)
+mds = model.compute_mds_3d_cpu()
+# mds[i, :] = [x, y, z] coordinates for sample i
 ```
 
-| Parameter | Type | Description |
-|:----------|:-----|:------------|
-| `y_true` | array-like | True labels |
-| `y_pred` | array-like | Predicted labels |
+**Returns:** ndarray of shape (n_samples, 3)
 
-**Returns:** ndarray of shape (n_classes, n_classes)
+**Note:** Requires `compute_proximity=True` and works with CPU proximity matrices. This is a fast C++ implementation of metric MDS.
 
 ---
 
-#### classification_report(y_true, y_pred)
+#### compute_mds_from_factors(k=3)
 
-Generate classification report with precision, recall, F1-score.
+Compute k-dimensional MDS coordinates from low-rank factors.
 
 ```python
-report = model.classification_report(y_true, y_pred)
-print(report)
+mds = model.compute_mds_from_factors(k=3)
 ```
 
-| Parameter | Type | Description |
-|:----------|:-----|:------------|
-| `y_true` | array-like | True labels |
-| `y_pred` | array-like | Predicted labels |
+| Parameter | Type | Default | Description |
+|:----------|:-----|:--------|:------------|
+| `k` | int | 3 | Number of MDS dimensions (2, 3, or more) |
 
-**Returns:** str, formatted classification report
+**Returns:** ndarray of shape (n_samples, k)
+
+**Note:** Only available when `use_qlora=True`.
 
 ---
+
+#### get_n_samples()
+
+Get number of training samples.
+
+```python
+n = model.get_n_samples()
+```
+
+**Returns:** int
+
+---
+
+#### get_n_features()
+
+Get number of features.
+
+```python
+n = model.get_n_features()
+```
+
+**Returns:** int
+
+---
+
+#### get_n_classes()
+
+Get number of classes.
+
+```python
+n = model.get_n_classes()
+```
+
+**Returns:** int
+
+---
+
+#### get_task_type()
+
+Get the task type (classification/regression/unsupervised).
+
+```python
+task = model.get_task_type()
+# Returns: "classification", "regression", or "unsupervised"
+```
+
+**Returns:** str
+
+---
+
+#### cleanup()
+
+Explicit cleanup of GPU memory for this model.
+
+```python
+model.cleanup()
+```
+
+**Returns:** None
+
+**Note:** Useful when you're done with a model and want to free GPU memory immediately without waiting for Python garbage collection.
+
+---
+
+#### get_oob_predictions()
+
+Get out-of-bag predictions for training samples.
+
+```python
+oob_pred = model.get_oob_predictions()
+```
+
+**Returns:** ndarray of shape (n_samples,) with OOB predicted class labels
+
+**Note:** Only available for training samples after `fit()` is called.
+
+---
+
 
 ## Visualization
 
@@ -279,6 +396,41 @@ rf.rfviz(
 
 ## Utility Functions
 
+### confusion_matrix(y_true, y_pred)
+
+Compute confusion matrix (module-level function).
+
+```python
+cm = rf.confusion_matrix(y_true, y_pred)
+```
+
+| Parameter | Type | Description |
+|:----------|:-----|:------------|
+| `y_true` | array-like | True labels |
+| `y_pred` | array-like | Predicted labels |
+
+**Returns:** ndarray of shape (n_classes, n_classes)
+
+---
+
+### classification_report(y_true, y_pred)
+
+Generate classification report with precision, recall, F1-score (module-level function).
+
+```python
+report = rf.classification_report(y_val, y_pred)
+print(report)
+```
+
+| Parameter | Type | Description |
+|:----------|:-----|:------------|
+| `y_true` | array-like | True labels |
+| `y_pred` | array-like | Predicted labels |
+
+**Returns:** str, formatted classification report
+
+---
+
 ### cuda_is_available()
 
 Check if CUDA GPU is available.
@@ -321,6 +473,65 @@ rf.clear_gpu_cache()
 
 ---
 
+### check_gpu_memory(size_mb)
+
+Check if sufficient GPU memory is available.
+
+```python
+if rf.check_gpu_memory(1000):  # Check for 1GB
+    print("Sufficient memory available")
+```
+
+| Parameter | Type | Description |
+|:----------|:-----|:------------|
+| `size_mb` | int | Required memory in MB |
+
+**Returns:** bool
+
+---
+
+### print_gpu_memory_status()
+
+Print current GPU memory status.
+
+```python
+rf.print_gpu_memory_status()
+```
+
+**Returns:** None
+
+**Output:** Prints total, used, and free GPU memory.
+
+---
+
+### gpu_cleanup()
+
+Force GPU cleanup and memory release.
+
+```python
+rf.gpu_cleanup()
+```
+
+**Returns:** None
+
+**Note:** More aggressive than `clear_gpu_cache()`. Use when experiencing memory issues.
+
+---
+
+### reset_cuda_device()
+
+Reset CUDA device (nuclear option for memory issues).
+
+```python
+rf.reset_cuda_device()
+```
+
+**Returns:** None
+
+**Warning:** This will invalidate all GPU allocations. Only use as last resort.
+
+---
+
 ## Data Loading
 
 ### load_wine()
@@ -336,6 +547,22 @@ print(f"Classes: {len(np.unique(y))}")
 **Returns:** tuple (X, y)
 - `X`: ndarray of shape (178, 13)
 - `y`: ndarray of shape (178,) with labels 0, 1, 2
+
+---
+
+### load_iris()
+
+Load the UCI Iris dataset.
+
+```python
+X, y = rf.load_iris()
+print(f"Samples: {X.shape[0]}, Features: {X.shape[1]}")
+print(f"Classes: {len(np.unique(y))}")
+```
+
+**Returns:** tuple (X, y)
+- `X`: ndarray of shape (150, 4)
+- `y`: ndarray of shape (150,) with labels 0, 1, 2
 
 ---
 
@@ -377,7 +604,7 @@ model = rf.RandomForestClassifier(
 model.fit(X, y)
 
 # Get MDS coordinates
-mds = model.compute_mds_from_factors(k=3)
+mds = model.compute_mds_3d_from_factors()
 
 # Interactive visualization
 rf.rfviz(model, X, y, output_file="wine_rfviz.html")
