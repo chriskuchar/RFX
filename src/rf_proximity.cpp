@@ -28,7 +28,7 @@ void cpu_proximity(const integer_t* nodestatus, const integer_t* nodextr,
     }
 #endif
     
-    // Check if we should use case-wise (bootstrap frequency weighted) or non-case-wise (simple co-occurrence)
+    // Check if case-wise (bootstrap frequency weighted) or non-case-wise (simple co-occurrence) should be used
     // Case-wise: prox(n, kk) = prox(n, kk) + nin(kk)/nodesize (Fortran proximity.f line 75)
     // Non-case-wise: prox(n, kk) = prox(n, kk) + 1.0 (UC Berkeley standard: simple co-occurrence counting)
     bool use_casewise = g_config.use_casewise;
@@ -136,16 +136,16 @@ void cpu_proximity(const integer_t* nodestatus, const integer_t* nodextr,
         }
         
         // Build ndbegin array (points to first case in each terminal node)
-        // CRITICAL: Allocate ndbegin with size nterm+1 to prevent out-of-bounds access
-        // ndbegin[k+1] is accessed in the loop below, so we need at least nterm+1 elements
+        // Allocate ndbegin with size nterm+1 to prevent out-of-bounds access
+        // ndbegin[k+1] is accessed in the loop below, so at least nterm+1 elements are required
         // 0-based indexing: ndbegin[k] = start index for terminal node k
         ndbegin[0] = 0;
         for (integer_t k = 1; k <= nterm; ++k) {
             ndbegin[k] = ndbegin[k - 1] + ncount[k - 1];
         }
-        // CRITICAL: Ensure ndbegin[nterm] is set to total number of cases
+        // Ensure ndbegin[nterm] is set to total number of cases
         // This is the end index for the last terminal node (nterm-1)
-        // When k == nterm-1, we access ndbegin[k+1] = ndbegin[nterm], which should be nsample
+        // When k == nterm-1, ndbegin[k+1] = ndbegin[nterm] is accessed, which should be nsample
         if (nterm > 0) {
             ndbegin[nterm] = ndbegin[nterm - 1] + ncount[nterm - 1];
         }
@@ -187,7 +187,7 @@ void cpu_proximity(const integer_t* nodestatus, const integer_t* nodextr,
                 
                 // Calculate nodesize = sum of nin(kk) for all in-bag cases in this node
                 integer_t nodesize = 0;
-                // CRITICAL: Safe bounds check for ndbegin[k+1]
+                // Safe bounds check for ndbegin[k+1]
                 // k is 0-based, so k+1 can be at most nterm (which is valid since ndbegin has size nterm+1)
                 integer_t end_idx = (k + 1 <= nterm) ? ndbegin[k + 1] : nsample;
                 if (end_idx > nsample) end_idx = nsample;  // Additional safety check
@@ -278,7 +278,7 @@ void cpu_proximity_rfgap(
         }
     }
     
-    // CRITICAL: Create flattened arrays to avoid issues with nested vector references
+    // Create flattened arrays to avoid issues with nested vector references
     // This prevents memory corruption if the outer vectors are reallocated during access
     // Flatten tree_nin: [tree][sample] -> [tree * nsample + sample]
     std::vector<integer_t> tree_nin_flat(ntree * nsample);

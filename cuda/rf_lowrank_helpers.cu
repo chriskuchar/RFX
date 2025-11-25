@@ -14,7 +14,6 @@ bool get_lowrank_factors_host(void* lowrank_proximity_ptr,
                                dp_t** A_host, dp_t** B_host, 
                                integer_t* r, integer_t nsamples) {
     if (lowrank_proximity_ptr == nullptr) {
-        // std::cerr << "DEBUG: get_lowrank_factors_host: lowrank_proximity_ptr is nullptr" << std::endl;
         return false;
     }
     
@@ -28,15 +27,7 @@ bool get_lowrank_factors_host(void* lowrank_proximity_ptr,
         integer_t factor_rank = 0;
         lowrank_prox->get_factors(&A_gpu, &B_gpu, &factor_rank);
         
-        // std::cout << "DEBUG: get_lowrank_factors_host - A_gpu=" << (void*)A_gpu 
-        //           << ", B_gpu=" << (void*)B_gpu 
-        //           << ", factor_rank=" << factor_rank << std::endl;
-        // std::cout.flush();
-        
         if (!A_gpu || !B_gpu || factor_rank == 0) {
-            // std::cerr << "DEBUG: get_lowrank_factors_host: factors not available (A_gpu=" << (void*)A_gpu 
-            //           << ", B_gpu=" << (void*)B_gpu 
-            //           << ", rank=" << factor_rank << ")" << std::endl;
             return false;
         }
         
@@ -56,7 +47,6 @@ bool get_lowrank_factors_host(void* lowrank_proximity_ptr,
         
         return true;
     } catch (...) {
-        // std::cerr << "DEBUG: get_lowrank_factors_host: exception occurred" << std::endl;
         return false;
     }
 }
@@ -87,7 +77,7 @@ bool reconstruct_proximity_matrix_host(void* lowrank_proximity_ptr,
         return false;
     }
     
-    // CRITICAL WARNING: Reconstructing full proximity matrix requires O(n²) memory!
+    // WARNING: Reconstructing full proximity matrix requires O(n²) memory!
     size_t matrix_size_bytes = static_cast<size_t>(nsamples) * nsamples * sizeof(dp_t);
     size_t matrix_size_gb = matrix_size_bytes / (1024ULL * 1024ULL * 1024ULL);
     

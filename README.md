@@ -52,7 +52,7 @@ Beyond prediction accuracy, RFX implements Breiman & Cutler's complete analytica
 
 **Case-wise Analysis** - Track bootstrap frequencies to understand model uncertainty. Identify difficult samples (low agreement) vs. confident predictions.
 
-**Interactive Visualization (rfviz)** - Explore your data with a 2×2 grid: 3D MDS projection, parallel coordinates, class votes, and feature values. Interactive workflow in Jupyter notebooks:
+**Interactive Visualization (rfviz)** - Explore your data with coordinated views: 3D MDS projection, parallel coordinates, class votes, and feature values. Interactive workflow in Jupyter notebooks:
 1. **Select samples** via brushing (click-drag in parallel coordinates) or point-by-point (3D MDS)
 2. **Linked highlighting** between parallel coordinate plots
 3. **Export selections** as JSON directly from the plot
@@ -224,7 +224,7 @@ rf.rfviz(
     output_file="rfviz_example.html",
     show_in_browser=False
 )
-print("\n✓ Saved interactive visualization to rfviz_example.html")
+print("\nSaved interactive visualization to rfviz_example.html")
 ```
 
 **Example Output:**
@@ -305,11 +305,11 @@ This helps identify:
 
 #### Interactive Visualization (rfviz)
 
-The `rfviz` function creates an interactive 2×2 grid visualization in HTML format:
+The `rfviz` function creates an interactive visualization in HTML format:
 
 ![RFviz Interactive Visualization](examples/rfviz_example.png)
 
-*RFviz 2×2 grid showing coordinated views of the wine dataset.*
+*RFviz showing coordinated views of the wine dataset.*
 
 **Four coordinated views:**
 1. **Top-left**: Input features (parallel coordinates) - see actual feature values for each sample
@@ -358,51 +358,127 @@ model.fit(X, y)
 ### Proximity Matrices with QLORA Compression
 
 ```python
-# GPU proximity with QLORA compression (memory efficient)
+# Example: Covertype dataset (10K samples) with QLORA compression
+import RFX as rf
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import urllib.request
+import gzip
+import shutil
+
+# Download Covertype from UCI ML Repository
+url = "https://archive.ics.uci.edu/ml/machine-learning-databases/covtype/covtype.data.gz"
+urllib.request.urlretrieve(url, "covtype.data.gz")
+
+with gzip.open("covtype.data.gz", 'rb') as f_in:
+    with open("covtype.data", 'wb') as f_out:
+        shutil.copyfileobj(f_in, f_out)
+
+df = pd.read_csv("covtype.data", header=None)
+
+# Sample 10K
+df = df.sample(n=10000, random_state=123).reset_index(drop=True)
+X = df.iloc[:, :-1].values.astype(np.float32)
+y_raw = df.iloc[:, -1].values.astype(np.int32)
+
+# Convert to 0-indexed classes
+unique_classes = np.unique(y_raw)
+class_map = {cls: idx for idx, cls in enumerate(unique_classes)}
+y = np.array([class_map[cls] for cls in y_raw], dtype=np.int32)
+
+# Train with QLORA (1200× memory compression: 0.7 GB → 0.6 MB)
 model = rf.RandomForestClassifier(
-    ntree=100,
+    ntree=500,
     use_gpu=True,
     compute_proximity=True,
-    use_qlora=True,  # Enable QLORA compression
-    quant_mode="int8",  # INT8 quantization (recommended)
-    rank=32  # Low-rank approximation rank
+    use_qlora=True,
+    rank=32,
+    quant_mode="int8",
+    iseed=123
 )
 
 model.fit(X, y)
 
 # Get low-rank factors (memory efficient)
-A, B = model.get_lowrank_factors()
-print(f"Low-rank factors shape: A={A.shape}, B={B.shape}")
+A, B, rank = model.get_lowrank_factors()
+print(f"Factors: A={A.shape}, B={B.shape}, rank={rank}")
+print(f"Memory: {(A.size + B.size) / 1024**2:.1f} MB")
 
-# Reconstruct proximity matrix (if needed)
-proximity = A @ B.T
+# Compute MDS directly from low-rank factors (no reconstruction!)
+mds_coords = model.compute_mds_from_factors(k=3)
 
-# Or compute MDS directly from factors (no reconstruction needed)
-mds_coords = model.compute_mds_3d_from_factors()
-print(f"MDS coordinates shape: {mds_coords.shape}")
-
-# Or compute and plot visualization from MDS directly
-rf.rfviz(
-    rf_model=model,
-    X=X,
-    y=y,
-    feature_names=["Feature 1", "Feature 2", ...],  # Optional
-    output_file="rfviz_output.html",
-    show_in_browser=True
-)
+# Visualize
+valid_mask = np.all(np.isfinite(mds_coords), axis=1)
+fig = go.Figure()
+for class_idx in np.unique(y[valid_mask]):
+    mask = (y[valid_mask] == class_idx)
+    fig.add_trace(go.Scatter3d(
+        x=mds_coords[valid_mask][mask, 0],
+        y=mds_coords[valid_mask][mask, 1],
+        z=mds_coords[valid_mask][mask, 2],
+        mode='markers',
+        name=f'Class {class_idx}',
+        marker=dict(size=4, opacity=0.7)
+    ))
+fig.update_layout(title='3D MDS from QLORA')
+fig.show()
 ```
 
-This creates an interactive HTML file with:
-- **Top-left**: Input features parallel coordinates
-- **Top-right**: Local importance parallel coordinates
-- **Bottom-left**: 3D MDS proximity plot (rotatable, zoomable)
-- **Bottom-right**: Class votes heatmap (RAFT-style)
+**QLORA MDS Quality Progression (Covertype 10K, rank=32):**
 
-All plots have **linked brushing** - selecting samples in one plot highlights them in all others. Press **R** or **Escape** to clear selections.
+| 50 trees | 5,000 trees | 10,000 trees |
+|----------|-------------|--------------|
+| ![50 trees](examples/covertype_10k_mds_50trees.png) | ![5K trees](examples/covertype_10k_mds_5000trees.png) | ![10K trees](examples/covertype_10k_mds_10000trees.png) |
+| 100% unique, 34% dense | 100% unique, 99% dense | 100% unique, 99% dense |
 
-![RFviz Interactive Visualization](examples/rfviz_example.png)
+*3D MDS progression showing how more trees improve proximity density with QLORA. All achieve 100% unique coverage with 1200× memory compression (0.7 GB → 0.6 MB). The 3rd dimension has lower variance (~3% of Dim 1) due to Random Forest proximity's flat eigenspectrum - this is expected behavior.*
 
-*Example: RFviz 2×2 grid showing coordinated views of the wine dataset. The interactive HTML version supports 3D rotation/zooming and linked brushing between the parallel coordinate plots.*
+**Note on dimensionality:** Random Forest proximity matrices have flat eigenspectra where all dimensions contribute equally. QLORA's low-rank approximation efficiently captures the top 2 dominant blended dimensions with high fidelity. The 3rd dimension is present but may have lower variance. For applications requiring robust 3D structure on small datasets (<5K samples), use full matrix (`use_qlora=False`). For large datasets (10K+) where full matrix is infeasible, QLORA provides excellent 3D visualization (2D-dominant) with massive memory savings.
+
+### 3D MDS Visualization (Plotly)
+
+For more focused 3D visualization, create standalone interactive plots:
+
+```python
+import plotly.graph_objects as go
+
+# Compute 3D MDS from low-rank factors
+mds_coords = model.compute_mds_from_factors(k=3)
+
+# Filter valid coordinates
+valid_mask = np.all(np.isfinite(mds_coords), axis=1)
+mds_valid = mds_coords[valid_mask]
+y_valid = y[valid_mask]
+
+# Create interactive 3D scatter plot
+fig = go.Figure()
+
+for class_idx in np.unique(y_valid):
+    mask = y_valid == class_idx
+    fig.add_trace(go.Scatter3d(
+        x=mds_valid[mask, 0],
+        y=mds_valid[mask, 1],
+        z=mds_valid[mask, 2],
+        mode='markers',
+        name=f'Class {int(class_idx)}',
+        marker=dict(size=6, opacity=0.8)
+    ))
+
+fig.update_layout(
+    title='3D MDS - Proximity-based Sample Embedding',
+    scene=dict(
+        xaxis_title='MDS Dimension 1',
+        yaxis_title='MDS Dimension 2',
+        zaxis_title='MDS Dimension 3'
+    ),
+    width=900,
+    height=700
+)
+
+fig.show()  # Interactive in Jupyter
+# fig.write_html("mds_3d.html")  # Save to file
+```
 
 ### CPU TriBlock Proximity (Lossless Compression)
 
@@ -476,6 +552,84 @@ Both modes are statistically valid; case-wise mode follows the unreleased Fortra
 
 **GPU Support:** All features shown above (importance, local importance, proximity, case-wise/non-case-wise) are available with GPU acceleration! Simply set `use_gpu=True`. For large-scale proximity matrices, add `use_qlora=True` with `quant_mode="int8"` for memory-efficient computation.
 
+## Best Practices
+
+### Recommended Tree Counts
+
+For complete proximity-based analysis (>95% MDS coverage), follow these tree-to-sample ratios:
+
+| Dataset Size | Trees:Sample Ratio | Example | Training Time |
+|--------------|-------------------|---------|---------------|
+| **< 500** | **8-10×** | 200 samples → 1,500-2,000 trees | Seconds |
+| **500-2K** | **6-8×** | 1K samples → 6K-8K trees | Minutes |
+| **2K-10K** | **5-7×** | 5K samples → 25K-35K trees | Tens of minutes |
+| **10K-50K** | **3-5×** | 20K samples → 60K-100K trees | GPU recommended |
+| **50K+** | **3-4×** | 100K samples → 300K-400K trees | GPU + QLORA required |
+
+**Quick rule:** Start with **5× your sample size** for 90-95% coverage, scale up to **8-10×** for >98% coverage on small datasets.
+
+**Why more trees for proximity?** Each sample needs sufficient out-of-bag occurrences (~500+) and co-occurrences with other samples to build reliable pairwise similarities. Standard classification requires fewer trees (100-500), but proximity-based analysis (MDS, clustering, outlier detection) benefits from higher tree counts.
+
+**Checking coverage:**
+```python
+mds = model.compute_mds_from_factors(k=3)
+valid = np.sum(np.all(np.isfinite(mds), axis=1))
+coverage = 100 * valid / len(y)
+print(f"MDS coverage: {coverage:.1f}% ({valid}/{len(y)} samples)")
+```
+
+If coverage is <90%, increase tree count by 1.5-2× for complete analysis.
+
+### When to Use QLORA vs. Full Matrix
+
+**CRITICAL:** QLORA is designed for **large datasets** where full proximity matrices are impossible. For small datasets, use the full matrix instead.
+
+| Dataset Size | Full Matrix Memory | Recommendation |
+|--------------|-------------------|----------------|
+| **< 5,000** | < 190 MB | **DON'T use QLORA** - Use full matrix (`use_qlora=False`) |
+| **5K-20K** | 0.2-3 GB | ~ Optional - Full matrix may fit in RAM |
+| **20K-50K** | 3-20 GB | Use QLORA with `rank=200-500` |
+| **50K-100K** | 20-75 GB | **MUST use QLORA** with `rank=100-200` |
+| **100K+** | 75+ GB | **MUST use QLORA** with `rank=100-150` |
+
+**Why avoid QLORA on small datasets?**
+
+QLORA uses low-rank approximation ($P \approx AB^T$) which is updated in round-robin fashion when rank is reached. For small datasets:
+- **Wine (178 samples)**: With rank=100 and 1500 trees, each column is overwritten 15× → signal dilution → only 60% unique MDS points
+- **Without QLORA**: Full 178×178 matrix (247 KB) → 100% perfect MDS quality
+
+**For large datasets**, QLORA is essential:
+- **100K samples**: Full matrix = 74.5 GB (impossible!) vs. rank-100 QLORA = 19 MB (4000× compression)
+- **200K samples**: Full matrix = 298 GB (impossible!) vs. rank-100 QLORA = 38 MB (8000× compression)
+
+**Choosing rank for QLORA:**
+
+```python
+# Rule of thumb: rank ≈ ntree (so each column sees 1 tree)
+# But capped at 100-200 for memory efficiency
+
+if n_samples >= 50000:
+    rank = min(100, ntree)  # 100K samples: rank=100 → 19 MB
+elif n_samples >= 20000:
+    rank = min(200, ntree)  # 50K samples: rank=200 → 10 MB
+else:
+    # Don't use QLORA - full matrix is small enough
+    use_qlora = False
+```
+
+**Covertype 10K Example (QLORA Showcase):**
+
+With high-precision accumulation (FP64) + final INT8 quantization, QLORA achieves excellent MDS quality even with minimal trees:
+
+| Trees | Training Time | Non-zero Factors | MDS Unique Points | Quality |
+|-------|---------------|------------------|-------------------|---------|
+| 50 | ~23s | 40% | 10,000/10,000 (100%) | Excellent |
+| 500 | ~3 min | 100% | 10,000/10,000 (100%) | Excellent |
+
+- **Memory**: 0.7 GB (full matrix) → **0.6 MB** (QLORA INT8, rank=32) = **1200× compression**
+- **Key insight**: Just 50 trees (0.5% of n_samples) achieves 100% MDS coverage!
+- **See**: `examples/qlora_covertype_mds_demo.py` for interactive 3D MDS plots
+
 ## Performance
 
 ### Memory Requirements
@@ -490,19 +644,24 @@ Both modes are statistically valid; case-wise mode follows the unreleased Fortra
 
 **Recommendation**: Use CPU TriBlock for <50K samples, GPU INT8 for 50K+ samples.
 
-### Speed Comparison (Wine Dataset, 500 trees)
+### Speed Benchmarks
 
-| Task | CPU | GPU | Speedup |
-|------|-----|-----|---------|
-| Overall Importance | 9.96s | 7.09s | 1.4× |
-| Local Importance (100 trees) | 4.16s | 22.57s | 0.18× (CPU faster) |
-| Proximity (100 trees, small dataset) | 3.94s | 17.38s | 0.23× (CPU faster) |
+**Wine Dataset (178 samples, 500 trees):**
+- Training: 0.3s (1,446 trees/sec on GPU)
+- Overall Importance: Included in training
+- OOB Error: Real-time during training
 
-**Note**: GPU excels at overall importance with 500+ trees. CPU is faster for local importance and proximity on small datasets. GPU advantage increases with dataset size.
+**Covertype Dataset (10K samples, QLORA rank=32):**
+- 50 trees: ~23s (2.2 trees/sec on GPU)
+- 500 trees: ~3 min (2.8 trees/sec on GPU)
+- Memory: 0.6 MB (vs 0.7 GB full matrix, 1200× compression)
+- MDS Quality: 100% unique points with 50+ trees
+
+**Note**: GPU performance scales with dataset size and tree count. QLORA enables proximity analysis on datasets that would otherwise require hundreds of GB of memory.
 
 ## Examples
 
-The `examples/` folder contains comprehensive demonstration scripts and validation examples:
+The `examples/` folder contains comprehensive demonstration scripts:
 
 ### Getting Started
 - **`wine_basic_classification.py`** - **Start here!** Complete example reproducing all Quick Start code:
@@ -514,20 +673,20 @@ The `examples/` folder contains comprehensive demonstration scripts and validati
   - All using RFX built-in functions (no sklearn needed)
 
 ### Classification Examples
-- `test_wine_step1_oob.py` - OOB error and confusion matrix
-- `test_wine_step2_importance.py` - Overall importance comparison
-- `test_wine_step3_local_importance.py` - Local importance benchmarking
+- `wine_oob_demo.py` - OOB error and confusion matrix
+- `wine_importance_demo.py` - Overall and local importance comparison (GPU/CPU × casewise/non-casewise)
 
-### Proximity Examples
-- `test_proximity_4way.py` - 4-way proximity comparison (GPU/CPU × casewise/non-casewise)
-- `test_quantization_comparison.py` - Quantization level comparison
-- `test_final_quantization_1000trees.py` - 1000-tree validation
-- `test_cpu_block_sparse.py` - CPU TriBlock proximity
-- `test_block_sparse_thresholds.py` - Block-sparse threshold analysis
+### QLORA Proximity Examples
+- `qlora_covertype_mds_demo.py` - QLORA MDS quality showcase on Covertype 10K dataset
+  - Demonstrates 1200× memory compression (0.7 GB → 0.6 MB)
+  - Shows 100% unique MDS points with minimal trees
+  - Interactive 3D MDS visualization
+- `covertype_qlora_helper.py` - Helper functions for loading Covertype dataset
 
 ### Visualization Examples
-- `test_oob_convergence_1k.py` - OOB convergence plot
-- `test_wine_gpu_rfviz.py` - RFviz 2×2 grid visualization
+- `wine_qlora_rfviz_demo.py` - RFviz interactive visualization with QLORA proximity
+- `rfviz_minimal_demo.py` - Minimal RFviz example
+- `mds_3d_example.py` - Standalone 3D MDS visualization example
 
 ### Run Examples
 
@@ -544,9 +703,10 @@ This will output OOB metrics, validation results, feature importance analysis, a
 
 Run other examples:
 ```bash
-python test_wine_step1_oob.py  # OOB benchmarks
-python test_wine_step2_importance.py  # Importance comparison
-# ... etc
+python wine_oob_demo.py              # OOB error and confusion matrix
+python wine_importance_demo.py       # Feature importance comparison
+python qlora_covertype_mds_demo.py   # QLORA MDS showcase
+python wine_qlora_rfviz_demo.py      # Interactive visualization with QLORA
 ```
 
 ## API Reference

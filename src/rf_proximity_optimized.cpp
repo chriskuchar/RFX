@@ -49,7 +49,7 @@ bool PersistentProximityMatrix::initialize(integer_t nsample, integer_t n_trees_
     gpu_memory_usage_ = fp16_size + fp32_size + 4 * index_size;
     cpu_memory_usage_ = fp32_size;
     
-    // Check if we have enough GPU memory
+    // Check if enough GPU memory is available
     size_t free_memory, total_memory;
     cudaMemGetInfo(&free_memory, &total_memory);
     
@@ -271,7 +271,7 @@ void SparseProximityMatrix::add_contribution(integer_t row, integer_t col, dp_t 
     // Add to sparse representation
     matrix_[row][col] += value;
     
-    // Check if we should convert to dense
+    // Check if conversion to dense should occur
     if (matrix_.size() > nsample_ * nsample_ * sparsity_threshold_) {
         // Convert to dense representation
         // This is a simplified version - full implementation would be more complex

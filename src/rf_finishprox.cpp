@@ -11,7 +11,7 @@ namespace rf {
 
 void cpu_finishprox(integer_t nsample, const integer_t* nout, dp_t* prox, dp_t* proxsym) {
     
-    // CRITICAL: Proximity matrix is stored in COLUMN-MAJOR format
+    // Proximity matrix is stored in COLUMN-MAJOR format
     // prox[i + j * nsample] = element at row i, column j
     // This matches how cpu_proximity writes: prox[n + kk * nsample]
     

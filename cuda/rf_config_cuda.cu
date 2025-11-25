@@ -56,7 +56,7 @@ bool cuda_is_available() {
 }
 
 bool cuda_init_runtime(bool force_cpu) {
-    // CRITICAL: XGBoost-style fork detection using PID tracking
+    // XGBoost-style fork detection using PID tracking
     // CUDA contexts cannot survive fork() - we must detect and reinitialize
     // This is essential for Jupyter kernels which fork from a parent process
     pid_t current_pid = getpid();
@@ -158,7 +158,7 @@ bool cuda_init_runtime(bool force_cpu) {
     
     // std::cout << "CUDA: Device properties retrieved - " << prop.name << " (Compute " << prop.major << "." << prop.minor << ")" << std::endl;
 
-    // CRITICAL: During initialization, we use cudaDeviceSynchronize() to ensure context is ready.
+    // During initialization, we use cudaDeviceSynchronize() to ensure context is ready.
     // This matches the backup version's approach. However, if there are stuck operations from
     // a previous run, this can hang. To prevent hangs, we first try a non-blocking check:
     // clear errors and test with a simple allocation. Only if that succeeds do we synchronize.
@@ -301,7 +301,7 @@ void cuda_reset_device() {
         // Wait a bit for device to be ready
         std::this_thread::sleep_for(std::chrono::milliseconds(200));  // Increased wait time
         
-        // CRITICAL: Reinitialize CUDA runtime after reset
+        // Reinitialize CUDA runtime after reset
         // cudaDeviceReset() destroys the context, so we need to recreate it
         err = cudaSetDevice(0);
         if (err == cudaSuccess) {
@@ -357,7 +357,7 @@ bool cuda_validate_context() {
 void cuda_ensure_context_ready() {
     if (!g_cuda_available) return;
     
-    // CRITICAL: Fork detection (Jupyter kernel restart)
+    // Fork detection (Jupyter kernel restart)
     // CUDA contexts cannot survive fork - we must reinitialize
     // Use a lightweight check that won't crash: cudaGetDevice
     cudaGetLastError();  // Clear any stale errors
@@ -394,7 +394,7 @@ void cuda_ensure_context_ready() {
 void cuda_finalize_operations() {
     if (!g_cuda_available) return;
     
-    // CRITICAL: For Jupyter compatibility, skip synchronization entirely
+    // For Jupyter compatibility, skip synchronization entirely
     // The GPU code already synchronizes before returning, so this is redundant
     // Skipping this prevents crashes when CUDA context is in an invalid state
     // This matches the pattern from commit 6a9a52f which avoids aggressive syncs

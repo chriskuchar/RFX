@@ -119,7 +119,7 @@ void QuantizationUtils::compute_int8_scaling(const float* data, size_t count,
 }
 
 // GPU version that computes min/max on GPU and stores results in device memory
-// CRITICAL: This function avoids ALL host copies - everything stays on device
+// This function avoids ALL host copies - everything stays on device
 // OPTIMIZATION: Uses persistent static buffers to avoid allocation/sync overhead per call
 void QuantizationUtils::compute_int8_scaling_gpu(const dp_t* data_gpu, size_t count, 
                                                  float* d_scale, float* d_zero_point) {

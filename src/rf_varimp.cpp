@@ -121,8 +121,6 @@ void cpu_varimp(const real_t* x, integer_t nsample, integer_t mdim,
     }
 #endif
     
-    // printf("DEBUG: cpu_varimp called with nsample=%d, mdim=%d, nnode=%d\n", nsample, mdim, nnode);
-    
     // Initialize arrays
     zervr(qimp, nsample);
     zervr(qimpm, nsample * mdim);
@@ -134,7 +132,7 @@ void cpu_varimp(const real_t* x, integer_t nsample, integer_t mdim,
     real_t right = 0.0f;
     std::vector<integer_t> joob(nsample);
     
-    // Check if we should use case-wise (bootstrap frequency weighted) or non-case-wise (simple averaging)
+    // Check if case-wise (bootstrap frequency weighted) or non-case-wise (simple averaging) should be used
     bool use_casewise = g_config.use_casewise;
     
     for (integer_t n = 0; n < nsample; ++n) {
@@ -153,8 +151,6 @@ void cpu_varimp(const real_t* x, integer_t nsample, integer_t mdim,
             noob++;
         }
     }
-    
-    // printf("DEBUG: Found %d OOB samples, original accuracy=%f\n", noob, right);
     
     // Step 2: Update qimp for local importance (if impn == 1)
     // Case-wise: Match Fortran varimp.f exactly: qimp(nn) = qimp(nn) + tnodewt(nodextr(nn))/noob
@@ -303,8 +299,6 @@ void cpu_varimp(const real_t* x, integer_t nsample, integer_t mdim,
         }
     }
 #endif
-    
-    // printf("DEBUG: Final avimp values: [%f, %f, %f, %f]\n", avimp[0], avimp[1], avimp[2], avimp[3]);
 }
 
 } // namespace rf

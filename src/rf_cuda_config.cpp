@@ -21,7 +21,6 @@ bool CudaConfig::initialize() {
     int device_count;
     cudaError_t err = cudaGetDeviceCount(&device_count);
     if (err != cudaSuccess || device_count == 0) {
-        // std::cerr << "CUDA: No GPU devices found" << std::endl;
         initialized_ = false;
         return false;
     }
@@ -32,7 +31,6 @@ bool CudaConfig::initialize() {
     // Get current device properties
     err = cudaGetDeviceProperties(device_props_, 0);
     if (err != cudaSuccess) {
-        // std::cerr << "CUDA: Failed to get device properties" << std::endl;
         delete device_props_;
         device_props_ = nullptr;
         initialized_ = false;
@@ -42,18 +40,6 @@ bool CudaConfig::initialize() {
     // Configure based on GPU capabilities
     configure_for_gpu();
     initialized_ = true;
-    
-    // Get current memory usage
-    size_t free_memory, total_memory;
-    cudaMemGetInfo(&free_memory, &total_memory);
-    
-    // std::cout << "CUDA: Initialized GPU " << device_props_->name 
-    //           << " (Compute " << device_props_->major << "." << device_props_->minor << ")"
-    //           << " with " << (device_props_->totalGlobalMem / (1024*1024*1024)) << "GB total memory" << std::endl;
-    
-    // std::cout << "CUDA: GPU Memory Status - Total: " << (total_memory / (1024*1024)) << "MB, "
-    //           << "Free: " << (free_memory / (1024*1024)) << "MB, "
-    //           << "Used: " << ((total_memory - free_memory) / (1024*1024)) << "MB" << std::endl;
     
     return true;
 }
@@ -144,7 +130,7 @@ bool CudaConfig::can_handle_problem_size(int nsample, int mdim, int ntree) const
     return total_estimated < get_available_memory();
 }
 
-// New function to check if we should stop instead of falling back to CPU
+// New function to check if execution should stop instead of falling back to CPU
 bool CudaConfig::should_stop_on_insufficient_memory(int nsample, int mdim, int ntree) const {
     if (!initialized_) return false; // Don't stop if not initialized
     
@@ -156,7 +142,7 @@ bool CudaConfig::should_stop_on_insufficient_memory(int nsample, int mdim, int n
     size_t total_estimated = proximity_memory + tree_memory + feature_memory;
     size_t available_memory = get_available_memory();
     
-    // If we need more than 50% of available memory, it's risky
+    // If more than 50% of available memory is needed, it's risky
     return total_estimated > available_memory * 0.5;
 }
 
@@ -173,10 +159,10 @@ bool CudaConfig::can_handle_cpu_problem_size(int nsample, int mdim, int ntree) c
                            bootstrap_memory + oob_memory;
     
     // For CPU, check system memory (rough estimate)
-    // Assume we have at least 1GB available for the process
+    // Assume at least 1GB is available for the process
     size_t min_available_cpu_memory = 1024ULL * 1024ULL * 1024ULL; // 1GB
     
-    // If we need more than 80% of minimum available CPU memory, it's risky
+    // If more than 80% of minimum available CPU memory is needed, it's risky
     return total_estimated < min_available_cpu_memory * 0.8;
 }
 

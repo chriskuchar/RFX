@@ -31,7 +31,7 @@ namespace {
             }
             fclose(meminfo);
         }
-        // Fallback: assume 4GB available if we can't read meminfo
+        // Fallback: assume 4GB available if meminfo cannot be read
         return 4ULL * 1024 * 1024 * 1024;
     }
 }
@@ -116,8 +116,8 @@ std::vector<double> compute_mds_3d_cpu(
     // Step 0: Normalize proximity matrix by OOB counts (for both RF-GAP and standard proximity)
     // Standard proximity: normalize each row i by nout[i] (matching original Fortran)
     // RF-GAP: normalize each row i by |Si| (already done in cpu_proximity_rfgap, but needed if reconstructed from low-rank)
-    // CRITICAL: Proximity matrix is stored in COLUMN-MAJOR format (prox[i + j * n])
-    // We'll keep everything column-major throughout to avoid transpositions
+    // Proximity matrix is stored in COLUMN-MAJOR format (prox[i + j * n])
+    // Keep everything column-major throughout to avoid transpositions
     std::vector<double> normalized_proximity;
     const dp_t* prox_to_use = proximity_matrix;
     
@@ -185,7 +185,7 @@ std::vector<double> compute_mds_3d_cpu(
         }
     }
     // Note: If proximity matrix has already been normalized by finishprox, oob_counts_rfgap may be nullptr
-    // In that case, we use the proximity matrix as-is (already normalized and symmetrized)
+    // In that case, the proximity matrix is used as-is (already normalized and symmetrized)
     
     // Step 1: Convert proximity to distance matrix
     // Match rfviz backup implementation: use max_prox - proximity
@@ -261,7 +261,7 @@ std::vector<double> compute_mds_3d_cpu(
     }
     
     // Step 3: Eigendecomposition using LAPACK dsyevd
-    // LAPACK expects column-major format, which we already have!
+    // LAPACK expects column-major format, which is already provided
     std::vector<double> work_matrix = centered_matrix;  // Already column-major, no transpose needed
     
     // Query workspace size

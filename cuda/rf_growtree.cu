@@ -25,6 +25,19 @@
 
 namespace rf {
 
+// Thread-local storage for low-rank proximity state
+// MUST be at file scope (not inside function) to persist across all batch calls
+// This fixes bug where 3000 trees (300 batches) would reset state, causing zero factors
+thread_local struct LowRankState {
+    void* lowrank_prox_ptr_raw;
+    bool lowrank_initialized;
+    integer_t total_trees_processed;
+    integer_t saved_nsample;
+    
+    LowRankState() : lowrank_prox_ptr_raw(nullptr), lowrank_initialized(false), 
+                   total_trees_processed(0), saved_nsample(0) {}
+} g_lowrank_state;
+
 // CUDA error checking macro - matches backup version (logs but doesn't throw)
 // #ifndef CUDA_CHECK_VOID
 // #define CUDA_CHECK_VOID(call) \
@@ -480,7 +493,7 @@ __global__ void gpu_bootstrap_kernel(
     curandState local_state = random_states[tree_id];
     
     // Generate bootstrap samples (match Fortran: int(randomu() * nsample) + 1)
-    // CRITICAL: Each thread needs independent random numbers
+    // Each thread needs independent random numbers
     // Use thread ID to advance the random state differently for each thread
     for (integer_t s = tid; s < nsample; s += stride) {
         // Create thread-specific random state by advancing the base state
@@ -498,7 +511,7 @@ __global__ void gpu_bootstrap_kernel(
         // Original Fortran: i = int(randomu()*nsample) + 1  (1-based: generates 1..nsample)
         // Fortran CUDA: i = int(rand_val * nsample) + 1, then if (i > nsample) i = nsample
         // C++ 0-based: i = static_cast<integer_t>(rand_val * nsample)
-        // CRITICAL: curand_uniform returns [0.0, 1.0), so rand_val * nsample is in [0.0, nsample)
+        // curand_uniform returns [0.0, 1.0), so rand_val * nsample is in [0.0, nsample)
         //           Casting to integer gives [0, nsample-1], which is correct for 0-based indexing
         integer_t i = static_cast<integer_t>(rand_val * static_cast<real_t>(nsample));
         // Clamp to valid range (should never be needed since curand_uniform < 1.0, but safety check)
@@ -506,11 +519,11 @@ __global__ void gpu_bootstrap_kernel(
         if (i < 0) i = 0;
         
         // Count occurrences using atomic operations
-        // CRITICAL: Use atomicAdd with proper memory ordering
+        // Use atomicAdd with proper memory ordering
         ::atomicAdd(&nin[i], 1);
     }
     
-    // CRITICAL: Ensure all atomic operations complete before reading
+    // Ensure all atomic operations complete before reading
     __threadfence_block();  // Ensure all writes in this block are visible
     __syncthreads();
     
@@ -614,7 +627,7 @@ __global__ void gpu_bootstrap_kernel(
     __syncthreads();
     
     // Compute weights based on counts
-    // CRITICAL: For case-wise: win = nin * weight, for non-case-wise: win = 1.0
+    // For case-wise: win = nin * weight, for non-case-wise: win = 1.0
     // Note: This code is already handled above in the jinbag population loop, so this is redundant
     // But keep it for compatibility with existing code structure
     for (integer_t n = tid; n < nsample; n += stride) {
@@ -892,7 +905,7 @@ __global__ void gpu_full_tree_kernel(
     real_t l1_reg,  // L1 regularization strength
     real_t l2_reg,  // L2 regularization strength
     bool gpu_parallel_mode0,
-    curandState* random_states) {  // CRITICAL: Pre-initialized random states (one per tree)
+    curandState* random_states) {  // Pre-initialized random states (one per tree)
     
     integer_t tree_id = blockIdx.x;
     if (tree_id >= num_trees) return;
@@ -1120,7 +1133,7 @@ __global__ void gpu_full_tree_kernel(
         integer_t min_size_to_split = (nclass == 1) ? (2 * minndsize) : minndsize;
         if (node_sample_count < min_size_to_split) {
             // Node is too small, make it terminal
-            // CRITICAL: ALL threads must execute this to avoid divergence
+            // ALL threads must execute this to avoid divergence
             if (threadIdx.x == 0) {
                 // Reduced debug output
                 // if (tree_id == 0 && kgrow < 10) {
@@ -1234,7 +1247,7 @@ __global__ void gpu_full_tree_kernel(
             // }
             
             // Generate random variable (following original: int(mdim*randomu())+1)
-            // CRITICAL: Use pre-initialized random state with hash-based skip
+            // Use pre-initialized random state with hash-based skip
             // Advancing RNG state in a loop is still too slow for parallel mode
             curandState local_state = random_states[tree_id];
             // Use skipahead to efficiently jump to the right position
@@ -1969,7 +1982,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     //           << ", mdim=" << mdim << std::endl;
     // std::cout.flush();
     
-    // CRITICAL: Validate basic parameters before any operations (prevents crashes)
+    // Validate basic parameters before any operations (prevents crashes)
     if (nsample <= 0 || num_trees <= 0 || mdim <= 0) {
         // Debug prints removed to avoid potential stream corruption issues
         // std::cerr << "[GPU_GROWTREE_BATCH] ERROR: Invalid parameters - nsample=" << nsample 
@@ -1977,7 +1990,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         return;
     }
     
-    // CRITICAL: Validate pointer parameters are not null (if they're required)
+    // Validate pointer parameters are not null (if they're required)
     if (x == nullptr) {
         // Debug prints removed to avoid potential stream corruption issues
         // std::cerr << "[GPU_GROWTREE_BATCH] ERROR: x is nullptr" << std::endl;
@@ -2002,7 +2015,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     g_config.use_gpu = true;
     g_config.force_cpu = false;
     
-    // CRITICAL: Ensure use_casewise is set BEFORE any GPU operations (importance, proximity, etc.)
+    // Ensure use_casewise is set BEFORE any GPU operations (importance, proximity, etc.)
     // This is already set in fit_batch_gpu, but verify it's set correctly here
     // Note: g_config.use_casewise should be set by caller (fit_batch_gpu), but we ensure it's valid here
     // The value is read by gpu_varimp (for overall and local importance), gpu_proximity, and gpu_proximity_upper_triangle
@@ -2025,7 +2038,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     // Default values if not set (shouldn't happen, but safety check)
     // Note: g_config.use_qlora and g_config.quant_mode are set in rf_random_forest.cpp before calling gpu_growtree_batch
     
-    // CRITICAL: Check CUDA context first before synchronizing (matches backup version exactly)
+    // Check CUDA context first before synchronizing (matches backup version exactly)
     // This prevents crashes in Jupyter when context is corrupted
     // Check CUDA context first before synchronizing
 // Debug prints removed
@@ -2328,7 +2341,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     // Initialize q array to zeros
     // std::cout << "DEBUG: About to call cudaMemset for q_all_gpu\n";
     
-    // CRITICAL: Clear any previous CUDA errors before memset to prevent false positives
+    // Clear any previous CUDA errors before memset to prevent false positives
     // Error code 1 (cudaErrorInvalidValue) often comes from stale error state
     cudaGetLastError(); // Clear any previous errors
     
@@ -2347,7 +2360,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     
     // std::cout << "DEBUG: q_all_gpu memset successful\n";
     
-    // CRITICAL: Clear error state after memset to prevent false positives in Jupyter
+    // Clear error state after memset to prevent false positives in Jupyter
     // Error code 1 (cudaErrorInvalidValue) is often a false positive from previous operations
     // We clear it silently to prevent Jupyter kernel crashes
     cudaGetLastError(); // Clear any error state (including false positives)
@@ -2468,7 +2481,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         0.0f,  // L1 regularization not used in original RF
         0.0f,  // L2 regularization not used in original RF
         g_config.gpu_parallel_mode0,
-        random_states  // CRITICAL: Pass pre-initialized random states to avoid slow curand_init in kernel
+        random_states  // Pass pre-initialized random states to avoid slow curand_init in kernel
     );
     
     // OPTIMIZATION: Only sync once after tree kernel (removed duplicate sync)
@@ -2481,7 +2494,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     // Single synchronization point after tree kernel
     CUDA_CHECK_VOID(cudaDeviceSynchronize());
     
-    // CRITICAL: Compute tnodewt for all trees IMMEDIATELY after tree growing completes
+    // Compute tnodewt for all trees IMMEDIATELY after tree growing completes
     // This must be done while win_all_gpu and nin_all_gpu are still in scope
     // OPTIMIZATION: Skip tnodewt if not needed (non-casewise + no importance)
     // tnodewt is only needed for: (1) casewise OOB weighting, (2) casewise importance
@@ -2596,7 +2609,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         }
     }
     
-    // CRITICAL: Copy tree data back to host BEFORE any post-processing (importance or proximity)
+    // Copy tree data back to host BEFORE any post-processing (importance or proximity)
     // This copy is needed for BOTH importance computation AND proximity computation
     // std::cout << "DEBUG: About to copy tree data back to host\n";
     
@@ -2690,7 +2703,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     //     std::fill(avimp_all, avimp_all + mdim, 0.0f);
     // }
     
-    // CRITICAL: Compute nodextr_all ONCE for BOTH proximity AND importance computation
+    // Compute nodextr_all ONCE for BOTH proximity AND importance computation
     // nodextr_all stores the terminal node index for each sample for each tree
     // It's needed by BOTH proximity (to know which terminal node each sample ends up in)
     // AND importance (to compute node weights for importance calculation)
@@ -2879,6 +2892,18 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     if (avimp_all != nullptr) {
         auto time_varimp_start = std::chrono::high_resolution_clock::now();
         
+        // OPTIMIZATION: Allocate GPU memory once for all trees (avoids 30K+ malloc/free calls)
+        rf::GPUVarImpContext* gpu_ctx = nullptr;
+        if (task_type == 0) {  // Classification uses GPU
+            // Use nsample as max_ninbag (worst-case: all samples in-bag)
+            // We can't scan nin array here because it's not initialized until trees are grown
+            // In practice, bootstrap samples ~63% unique, but we need to handle worst case
+            integer_t max_ninbag = nsample;
+            
+            // Allocate context ONCE for all trees
+            gpu_ctx = rf::gpu_varimp_alloc_context(nsample, mdim, maxnode, maxcat, max_ninbag, nclass, mdim, 256);
+        }
+        
         for (integer_t tree_id = 0; tree_id < num_trees; ++tree_id) {
         auto time_tree_start = std::chrono::high_resolution_clock::now();
         // std::cout << "DEBUG: Processing tree " << tree_id << " for variable importance..." << std::endl;
@@ -2905,7 +2930,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         
         // Compute jtr_tree from nodextr_tree for ALL samples (needed for OOB vote accumulation)
         // jtr_tree[n] = nodeclass of terminal node that sample n reaches
-        // CRITICAL: nodextr_tree must be valid (copied from nodextr_all above)
+        // nodextr_tree must be valid (copied from nodextr_all above)
         // Simplified logic: just look up nodeclass from nodextr (terminal node index)
         for (integer_t n = 0; n < nsample; ++n) {
             integer_t kt = nodextr_tree[n];  // Use pre-computed terminal node
@@ -3009,13 +3034,13 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         }
         
         // Accumulate OOB votes/predictions for this tree only
-        // CRITICAL: For all task types, increment nout_all for OOB samples to match CPU behavior
+        // For all task types, increment nout_all for OOB samples to match CPU behavior
         // This ensures correct normalization in finalize_training() and compute_regression_mse()
         if (task_type == 0 || task_type == 2) {  // CLASSIFICATION or UNSUPERVISED
             // For classification/unsupervised: accumulate class votes in q_tree
             // Also increment nout_all for OOB samples (needed for normalization)
             
-            // CRITICAL: Compute tnodewt for classification casewise mode (CPU fallback)
+            // Compute tnodewt for classification casewise mode (CPU fallback)
             // For classification with casewise=True, tnodewt[node] = mean bootstrap weight of in-bag samples in that node
             std::vector<real_t> tnodewt_tree(maxnode, 0.0f);
             
@@ -3114,7 +3139,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                     }
                     
                     if (jtr_tree[n] >= 0 && jtr_tree[n] < nclass) {
-                        // CRITICAL: Casewise vs non-casewise weighting for OOB votes (GPU path)
+                        // Casewise vs non-casewise weighting for OOB votes (GPU path)
                         // Non-casewise: weight = 1.0 (UC Berkeley standard)
                         // Casewise: weight = tnodewt[terminal_node] (bootstrap frequency weighted)
                         real_t vote_weight = 1.0f;
@@ -3129,7 +3154,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                 }
             }
             
-            // CRITICAL: Accumulate q_tree into global q_all (needed for OOB predictions)
+            // Accumulate q_tree into global q_all (needed for OOB predictions)
             // Note: q_all is host memory, q_all_gpu is GPU memory
             // We accumulate into host q_all here, and gpu_oob_vote_kernel will also write to q_all_gpu
             // For classification, we use the per-tree accumulation (more accurate)
@@ -3191,7 +3216,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
             // For regression: accumulate regression predictions from tnodewt[nodextr_tree[n]]
             // oob_predictions_all stores the SUM of predictions across all trees
             // Final prediction = oob_predictions_all[n] / nout_all[n] (average across trees)
-            // CRITICAL: Increment nout_all for OOB samples to match CPU behavior
+            // Increment nout_all for OOB samples to match CPU behavior
             // This ensures correct normalization in compute_regression_mse()
             if (oob_predictions_all != nullptr && tnodewt_all != nullptr && nout_all != nullptr) {
                 integer_t tree_offset = tree_id * maxnode;
@@ -3224,7 +3249,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         // Call appropriate variable importance function based on task type
         // Use global arrays for local importance accumulation
         auto time_varimp_func_start = std::chrono::high_resolution_clock::now();
-        // CRITICAL: Only require qimp_all for importance - qimpm_all is only needed for LOCAL importance
+        // Only require qimp_all for importance - qimpm_all is only needed for LOCAL importance
         if (qimp_all != nullptr) {
             if (task_type == 1) {  // 1=REGRESSION
                 // Use regression-specific importance (MSE-based)
@@ -3236,11 +3261,8 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                     
                     // For regression, tnodewt_ptr should point to tnodewt_all if available
                     // (tnodewt_all is computed for OOB predictions and contains mean y values in terminal nodes)
-                    real_t* tnodewt_ptr = nullptr;
-                    if (tnodewt_all != nullptr) {
-                        integer_t tree_offset = tree_id * maxnode;
-                        tnodewt_ptr = tnodewt_all + tree_offset;
-                    }
+                    // Note: tnodewt_ptr would be used when regression varimp is implemented
+                    (void)tnodewt_all;  // Suppress unused variable warning
                     
                     // REGRESSION VARIMP NOT IMPLEMENTED IN THIS RELEASE
                     throw std::runtime_error("Regression variable importance not supported in this release");
@@ -3316,17 +3338,35 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                 tnodewt_ptr = tnodewt_all + tree_offset;
             }
             
-            gpu_varimp(x, nsample, mdim, cl, nin + jinbag_offset, jtr_tree.data(),
-                       impn,
+            // OPTIMIZED: Use pre-allocated GPU context (avoids 20+ malloc/free per tree)
+            if (gpu_ctx != nullptr) {
+                gpu_varimp_with_context(gpu_ctx, x, nsample, mdim, cl, nin + jinbag_offset, jtr_tree.data(),
+                           impn, qimp_temp.data(), qimpm_temp.data(), avimp_temp.data(), sqsd_temp.data(),
+                           treemap_all + tree_offset * 2, nodestatus_all + tree_offset,
+                           xbestsplit_all + tree_offset, bestvar_all + tree_offset,
+                           nodeclass_all + tree_offset, nnode_all[tree_id],
+                           cat, jvr_temp.data(), nodexvr_temp.data(),
+                           maxcat, nullptr, tnodewt_ptr, nodextr_tree.data(),
+                           y_regression, win, jinbag_tree, ninbag, nclass, task_type);
+            } else {
+                // Context allocation failed - compute OVERALL importance only (skip local)
+                // Local importance would be too slow without optimized context (30× slower)
+                if (tree_id == 0) {
+                    std::cerr << "Warning: GPU memory insufficient for local importance context." << std::endl;
+                    std::cerr << "         Computing overall importance only (local importance disabled)." << std::endl;
+                }
+                
+                // Just compute overall importance using the old path
+                gpu_varimp(x, nsample, mdim, cl, nin + jinbag_offset, jtr_tree.data(),
+                           0,  // impn=0: disable local importance (too slow without context)
                            qimp_temp.data(), qimpm_temp.data(), avimp_temp.data(), sqsd_temp.data(),
-                       treemap_all + tree_offset * 2, nodestatus_all + tree_offset,
-                       xbestsplit_all + tree_offset, bestvar_all + tree_offset,
-                       nodeclass_all + tree_offset, nnode_all[tree_id],
-                       cat, jvr_temp.data(), nodexvr_temp.data(),
-                       maxcat, nullptr, // catgoleft not used
-                       tnodewt_ptr,  // Use pre-computed tnodewt (computed after tree growing)
-                       nodextr_tree.data(),
-                       y_regression, win, jinbag_tree, ninbag, nclass, task_type);
+                           treemap_all + tree_offset * 2, nodestatus_all + tree_offset,
+                           xbestsplit_all + tree_offset, bestvar_all + tree_offset,
+                           nodeclass_all + tree_offset, nnode_all[tree_id],
+                           cat, jvr_temp.data(), nodexvr_temp.data(),
+                           maxcat, nullptr, tnodewt_ptr, nodextr_tree.data(),
+                           y_regression, win, jinbag_tree, ninbag, nclass, task_type);
+            }
             
             // Debug prints removed to avoid potential stream corruption issues
             // if (task_type == 0 && tree_id < 3) {
@@ -3344,7 +3384,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
             //               << non_zero_qimp << " / " << nsample << std::endl;
             // }
                 
-                // CRITICAL: Check for CUDA errors after gpu_varimp (it uses GPU internally)
+                // Check for CUDA errors after gpu_varimp (it uses GPU internally)
                 cudaError_t varimp_err = cudaGetLastError();
                 if (varimp_err != cudaSuccess) {
                     // std::cerr << "Warning: CUDA error after gpu_varimp for tree " << tree_id << ": " << cudaGetErrorString(varimp_err) << std::endl;
@@ -3375,7 +3415,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         // std::cout << "GPU: gpu_varimp completed for tree " << tree_id << std::endl;
         
         // Accumulate importance values into the global arrays
-        // CRITICAL: Ensure avimp_all is not nullptr before accumulating
+        // Ensure avimp_all is not nullptr before accumulating
         if (avimp_all != nullptr) {
         for (integer_t i = 0; i < mdim; ++i) {
             avimp_all[i] += avimp_temp[i];
@@ -3388,6 +3428,11 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         
         auto time_varimp_end = std::chrono::high_resolution_clock::now();
         
+        // CLEANUP: Free GPU context after all trees are processed
+        if (gpu_ctx != nullptr) {
+            rf::gpu_varimp_free_context(gpu_ctx);
+        }
+        
         // Synchronize after importance computation loop completes
         // Use stream sync for better Jupyter compatibility
         if (avimp_all != nullptr) {
@@ -3395,7 +3440,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         }
     }
     
-    // CRITICAL: Accumulate OOB votes for classification/unsupervised
+    // Accumulate OOB votes for classification/unsupervised
     // This MUST run even if avimp_all is nullptr (when importance is not computed)
     // The vote accumulation was previously inside the avimp_all block, causing it to be skipped
     if ((task_type == 0 || task_type == 2) && q_all != nullptr && nodextr_all != nullptr) {
@@ -3424,7 +3469,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                 }
             }
             
-            // CRITICAL: Compute tnodewt for casewise mode (CPU fallback)
+            // Compute tnodewt for casewise mode (CPU fallback)
             // This must be done here for OOB vote accumulation to work correctly with casewise
             std::vector<real_t> tnodewt_tree(maxnode, 0.0f);
             if (g_config.use_casewise && tnodewt_all != nullptr) {
@@ -3493,7 +3538,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                         nout_all[n]++;
                     }
                     if (jtr_tree[n] >= 0 && jtr_tree[n] < nclass) {
-                        // CRITICAL: Casewise vs non-casewise weighting for OOB votes
+                        // Casewise vs non-casewise weighting for OOB votes
                         // Non-casewise: weight = 1.0 (UC Berkeley standard)
                         // Casewise: weight = tnodewt[terminal_node] (bootstrap frequency weighted)
                         real_t vote_weight = 1.0f;
@@ -3518,7 +3563,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     }
     
     // Launch OOB vote accumulation kernel
-    // CRITICAL: For classification (task_type == 0), we skip the GPU kernel because
+    // For classification (task_type == 0), we skip the GPU kernel because
     // we already accumulate votes per-tree in the loop above (q_tree -> q_all).
     // The GPU kernel would overwrite our correct per-tree accumulation.
     // For regression/unsupervised, we can use the GPU kernel if needed.
@@ -3535,7 +3580,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
             nin_all_gpu, cl_gpu, x_gpu, q_all_gpu
         );
         
-        // CRITICAL: Check for kernel launch errors immediately
+        // Check for kernel launch errors immediately
         // cudaError_t kernel_err = cudaGetLastError();
         // if (kernel_err != cudaSuccess) {
         //     std::cerr << "Warning: OOB vote kernel launch error: error code " << kernel_err << std::endl;
@@ -3544,7 +3589,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         
         // std::cout << "DEBUG: About to sync stream after OOB vote kernel\n";
         
-        // CRITICAL: Check for kernel launch errors before syncing
+        // Check for kernel launch errors before syncing
         // cudaError_t launch_err = cudaGetLastError();
         // if (launch_err != cudaSuccess) {
         //     std::cerr << "ERROR: OOB vote kernel launch failed: " << cudaGetErrorString(launch_err) << std::endl;
@@ -3554,7 +3599,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         // Use device sync like backup version
         CUDA_CHECK_VOID(cudaDeviceSynchronize());
         
-        // CRITICAL: Check for kernel execution errors after sync
+        // Check for kernel execution errors after sync
         // cudaError_t exec_err = cudaGetLastError();
         // if (exec_err != cudaSuccess) {
         //     std::cerr << "ERROR: OOB vote kernel execution error: " << cudaGetErrorString(exec_err) << std::endl;
@@ -3657,7 +3702,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     
     // std::cout << "DEBUG: Entering proximity computation section" << std::endl;
     
-    // CRITICAL SAFETY CHECK: Skip proximity entirely if use_qlora is requested but not enabled
+    // Skip proximity entirely if use_qlora is requested but not enabled
     // Low-rank mode (use_qlora=True) is required for GPU proximity computation
     if ((proximity_all != nullptr || g_config.iprox) && !g_config.use_qlora && g_config.use_gpu) {
         // Warning removed for Jupyter compatibility (don't print to stderr)
@@ -3704,7 +3749,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     //           << ", proximity_all=" << (proximity_all != nullptr ? "non-null" : "null")
     //           << ", nsample=" << nsample << std::endl;
     
-    // CRITICAL SAFETY CHECK: If proximity is requested but low-rank is disabled on GPU,
+    // If proximity is requested but low-rank is disabled on GPU,
     // warn but allow it (user may have allocated proximity_all themselves)
     // if ((proximity_all != nullptr || g_config.iprox) && !g_config.use_qlora && g_config.use_gpu) {
     //     std::cerr << "WARNING: Proximity requested on GPU but use_qlora=false. "
@@ -3720,7 +3765,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         // NOTE: Low-rank mode is GPU-only (requires CUDA kernels, cuBLAS, cuSolver)
         // CPU mode will never use low-rank - it always computes full proximity matrix
         // 
-        // CRITICAL: g_config.use_gpu is set to true at the start of this function (line 2214)
+        // g_config.use_gpu is set to true at the start of this function (line 2214)
         // and g_config.use_qlora should be set by the caller (rf_random_forest.cpp) before calling this function
         if (g_config.use_gpu && g_config.use_qlora) {
             use_lowrank = true;  // Force low-rank for all GPU datasets when QLoRA is enabled
@@ -3756,24 +3801,14 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     if (should_compute_standard_proximity) {
         // Standard low-rank proximity (GPU only)
         
-        // CRITICAL: Use thread-local storage to avoid static initialization order issues
-        // Thread-local storage initializes lazily on first access, avoiding crashes
-        // std::cout << "DEBUG: About to create thread_local LowRankState..." << std::endl;
+        // Use file-scope thread-local storage (g_lowrank_state declared at top of file)
+        // This ensures state persists across all batch calls, fixing the bug where
+        // 3000 trees (300 batches) would reset state and produce zero factors
         
-        thread_local struct LowRankState {
-            void* lowrank_prox_ptr_raw;
-            bool lowrank_initialized;
-            integer_t total_trees_processed;
-            integer_t saved_nsample;
-            
-            LowRankState() : lowrank_prox_ptr_raw(nullptr), lowrank_initialized(false), 
-                           total_trees_processed(0), saved_nsample(0) {}
-        } state;
-        
-        void*& lowrank_prox_ptr_raw = state.lowrank_prox_ptr_raw;
-        bool& lowrank_initialized = state.lowrank_initialized;
-        integer_t& total_trees_processed = state.total_trees_processed;
-        integer_t& saved_nsample = state.saved_nsample;
+        void*& lowrank_prox_ptr_raw = g_lowrank_state.lowrank_prox_ptr_raw;
+        bool& lowrank_initialized = g_lowrank_state.lowrank_initialized;
+        integer_t& total_trees_processed = g_lowrank_state.total_trees_processed;
+        integer_t& saved_nsample = g_lowrank_state.saved_nsample;
         
         // Allocate proximity workspace arrays
         std::vector<integer_t> nod_workspace(maxnode);
@@ -3788,7 +3823,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
         //           << ", use_lowrank=" << use_lowrank 
         //           << ", use_upper_triangle=" << use_upper_triangle << std::endl;
         
-        // CRITICAL: Ensure use_lowrank is consistent with use_qlora
+        // Ensure use_lowrank is consistent with use_qlora
         // If use_qlora is true and we're on GPU, use_lowrank MUST be true
         if (g_config.use_gpu && g_config.use_qlora && !use_lowrank) {
             // std::cerr << "WARNING: use_qlora=true but use_lowrank=false - forcing use_lowrank=true" << std::endl;
@@ -3802,19 +3837,25 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
             // Get quantization level from config - use fully qualified name
             // Delay type resolution until we actually need it
             int quant_mode_int = g_config.quant_mode;
+            // REMOVED: quant_level determination - we always use FP16 during training
+            // Quantization happens only at the end via finalize_accumulation()
             
-            // Matches backup version - direct cast, no try-catch
-                rf::cuda::QuantizationLevel quant_level = static_cast<rf::cuda::QuantizationLevel>(quant_mode_int);
+            // Detect if this is a NEW model instance
+            // If lowrank_proximity_ptr_out points to nullptr, it means RandomForest just allocated
+            // a fresh lowrank_proximity_ptr_ member, so we're starting a new model
+            // In this case, reset thread_local state to prevent reusing stale pointers from previous models
+            bool is_new_model = (lowrank_proximity_ptr_out != nullptr && 
+                                *lowrank_proximity_ptr_out == nullptr &&
+                                lowrank_prox_ptr_raw != nullptr);
             
-            // std::cout << "GPU Proximity: Using low-rank with upper triangle (quant_level=" 
-            //           << quant_mode_int << ")" << std::endl;
-            
-            // Check if nsample changed (new model) - need to reset
-            if (lowrank_prox_ptr_raw != nullptr && saved_nsample != nsample) {
-                    delete static_cast<rf::cuda::LowRankProximityMatrix*>(lowrank_prox_ptr_raw);
+            // Check if nsample changed OR new model detected - need to reset
+            if (lowrank_prox_ptr_raw != nullptr && (saved_nsample != nsample || is_new_model)) {
+                    // Don't delete - the previous model's destructor already did that
+                    // Just reset our thread_local pointers
                 lowrank_prox_ptr_raw = nullptr;
                 lowrank_initialized = false;
                 total_trees_processed = 0;
+                saved_nsample = 0;
             }
             
             // Initialize LowRankProximityMatrix on first batch (persists across batches)
@@ -3890,37 +3931,13 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                     // For nsample > 10000: NO CPU temp buffers! Compute directly on GPU
                     // Allocate GPU memory directly (no CPU allocation)
                     size_t upper_triangle_size = (static_cast<size_t>(nsample) * (nsample + 1)) / 2;
+                    
+                    // ALWAYS compute per-tree proximity in FP16 during training
+                    // Quantization to INT8/NF4 happens ONLY at the very end via finalize_accumulation()
+                    // This prevents compounding quantization errors during training
                     __half* tree_prox_upper_gpu = nullptr;
-                    
-                    // Matches backup version - no context corruption checks
-                    
-                    // Matches backup version - direct allocation, no error checking
                     CUDA_CHECK_VOID(cudaMalloc(&tree_prox_upper_gpu, upper_triangle_size * sizeof(__half)));
                     cudaMemset(tree_prox_upper_gpu, 0, upper_triangle_size * sizeof(__half));
-                    
-                    // Allocate buffer with correct type based on quantization level
-                    // Note: upper_triangle_size already declared above
-                    void* prox_upper_typed = nullptr;
-                    size_t prox_buffer_size = 0;
-                    
-                    if (quant_level == rf::cuda::QuantizationLevel::FP32) {
-                        prox_buffer_size = upper_triangle_size * sizeof(dp_t);
-                    } else if (quant_level == rf::cuda::QuantizationLevel::FP16) {
-                        prox_buffer_size = upper_triangle_size * sizeof(__half);
-                    } else if (quant_level == rf::cuda::QuantizationLevel::INT8) {
-                        prox_buffer_size = upper_triangle_size * sizeof(int8_t);
-                    } else if (quant_level == rf::cuda::QuantizationLevel::NF4) {
-                        prox_buffer_size = (upper_triangle_size + 1) / 2;  // NF4: 4 bits per element
-                    } else {
-                        // std::cerr << "ERROR: Unsupported quantization level for tree " << tree_id << std::endl;
-                        CUDA_CHECK_VOID(cudaFree(tree_prox_upper_gpu));
-                        continue;
-                    }
-                    
-                    // Free old buffer and allocate new one with correct type
-                    CUDA_CHECK_VOID(cudaFree(tree_prox_upper_gpu));
-                    CUDA_CHECK_VOID(cudaMalloc(&prox_upper_typed, prox_buffer_size));
-                    cudaMemset(prox_upper_typed, 0, prox_buffer_size);
                     
                     // Matches backup version - assume arrays are on host (they're copied from GPU earlier)
                     // Copy data to host arrays for gpu_proximity_upper_triangle (it expects host pointers)
@@ -3928,22 +3945,9 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                     std::vector<integer_t> nodextr_host(nsample);
                     std::vector<integer_t> nin_host(nsample);
                     
-                    // CRITICAL: nodextr_all uses jinbag_offset = tree_id * nsample (same as nin_offset)
+                    // nodextr_all uses jinbag_offset = tree_id * nsample (same as nin_offset)
                     integer_t nodextr_offset = tree_id * nsample;  // nodextr_all uses same offset as jinbag
                     
-                    // DEBUG: Check nodextr and nin values for first tree
-                    if (tree_id == 0) {
-                        integer_t nodextr_nonzero = 0;
-                        integer_t nin_nonzero = 0;
-                        for (integer_t i = 0; i < nsample; ++i) {
-                            if (nodextr_all[nodextr_offset + i] > 0) nodextr_nonzero++;
-                            if (nin[nin_offset + i] > 0) nin_nonzero++;
-                        }
-// Debug prints removed
-                        // std::cout << "[DEBUG PROXIMITY TREE 0] nodextr_nonzero=" << nodextr_nonzero 
-                        //           << "/" << nsample << ", nin_nonzero=" << nin_nonzero 
-                        //           << "/" << nsample << std::endl;
-                    }
                     
                     // Direct memcpy - arrays are already on host
                     std::memcpy(nodestatus_host.data(), nodestatus_all + tree_offset, 
@@ -3953,14 +3957,14 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                     std::memcpy(nin_host.data(), nin + nin_offset, 
                                 nsample * sizeof(integer_t));
                     
-                    // Matches backup version - direct calls, no try-catch, no pointer validation
-                    rf::cuda::gpu_proximity_upper_triangle(
+                    // Always compute proximity in FP16 during training
+                    // Quantization to INT8/NF4 happens only at the end
+                    rf::cuda::gpu_proximity_upper_triangle_fp16(
                         nodestatus_host.data(),
                         nodextr_host.data(),
                         nin_host.data(),
                         nsample, nnode_all[tree_id],  // Use actual number of nodes, not maxnode!
-                        quant_level,  // Pass quantization level
-                        prox_upper_typed,  // Output buffer (GPU pointer, type depends on quant_level)
+                        tree_prox_upper_gpu,  // FP16 output buffer
                         nod_workspace.data(), ncount_workspace.data(), ncn_workspace.data(),
                         nodexb_workspace.data(), ndbegin_workspace.data(), npcase_workspace.data()
                     );
@@ -3968,16 +3972,13 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                     // Increment tree counter for this tree (needed for finalize_accumulation)
                     total_trees_processed++;
                     
-                    // Add to low-rank matrix using generic function that handles all quant levels
-                    float int8_scale = 1.0f / 127.0f;  // Default scale for INT8
-                    float int8_zero_point = 0.0f;  // Default zero point for INT8
-                    
-                    lowrank_prox_ptr->add_tree_contribution_incremental_upper_triangle(
-                        prox_upper_typed, nsample, quant_level, int8_scale, int8_zero_point
+                    // Add to low-rank matrix using FP16 directly (no quantization during training!)
+                    lowrank_prox_ptr->add_tree_contribution_incremental_upper_triangle_fp16(
+                        tree_prox_upper_gpu, nsample
                     );
                     
-                    // Free GPU memory - matches backup version
-                    CUDA_CHECK_VOID(cudaFree(prox_upper_typed));
+                    // Free GPU memory
+                    CUDA_CHECK_VOID(cudaFree(tree_prox_upper_gpu));
                 }
                 
                 // RF-GAP proximity computation with QLoRA/low-rank (if enabled)
@@ -4003,7 +4004,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                         CUDA_CHECK_VOID(cudaMalloc(&tree_rfgap_upper_gpu, upper_triangle_size * sizeof(__half)));
                         cudaMemset(tree_rfgap_upper_gpu, 0, upper_triangle_size * sizeof(__half));
                         
-                        // CRITICAL: Ensure nodextr_all is computed before using it
+                        // Ensure nodextr_all is computed before using it
                         if (nodextr_all == nullptr) {
                             // std::cerr << "ERROR: nodextr_all is nullptr but needed for RF-GAP proximity computation!" << std::endl;
                             // Safe free to prevent segfaults
@@ -4031,7 +4032,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                     }
                 }
                 
-                // CRITICAL: Synchronize device after all tree contributions are added
+                // Synchronize device after all tree contributions are added
                 // This ensures all cuBLAS/cuSolver operations from all trees complete
                 // before we finalize or move to next batch. Required for correct accumulation across batches.
                 CUDA_CHECK_VOID(cudaDeviceSynchronize());
@@ -4051,8 +4052,9 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                     // std::cout << "GPU Proximity: All batches complete (" << total_trees_processed 
                     //           << " total trees). Reconstructing full proximity matrix..." << std::endl;
                     // Finalize accumulation and reconstruct full proximity matrix
-                    lowrank_prox_ptr->finalize_accumulation(total_trees_processed);
-                    // CRITICAL: Sync after finalize_accumulation to ensure all operations complete
+                    // final_call=true: This path is for full reconstruction, so it's the end
+                    lowrank_prox_ptr->finalize_accumulation(total_trees_processed, /*final_call=*/true);
+                    // Sync after finalize_accumulation to ensure all operations complete
                     CUDA_CHECK_VOID(cudaDeviceSynchronize());
                     lowrank_prox_ptr->get_accumulated_proximity(proximity_all, nsample);
                     // std::cout << "GPU Proximity: Low-rank accumulation completed and reconstructed" << std::endl;
@@ -4071,8 +4073,9 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                     }
                     // Finalize accumulation so factors are available for retrieval
                     // This sets trees_processed_ so get_factors() can work correctly
-                    lowrank_prox_ptr->finalize_accumulation(total_trees_processed);
-                    // CRITICAL: Sync after finalize_accumulation to ensure all operations complete before returning
+                    // final_call=true: Quantize factors now for storage (only once, saves 8× memory)
+                    lowrank_prox_ptr->finalize_accumulation(total_trees_processed, /*final_call=*/true);
+                    // Sync after finalize_accumulation to ensure all operations complete before returning
                     CUDA_CHECK_VOID(cudaDeviceSynchronize());
                     // std::cout << "GPU Proximity: Low-rank accumulation completed for this batch (" 
                     //           << num_trees << " trees). Total trees processed: " << total_trees_processed 
@@ -4111,10 +4114,10 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
             
             // Accumulate this tree's proximity into the global matrix
                 // This accumulates across all batches (proximity_all persists across batch calls)
-                // CRITICAL: Ensure GPU operations complete before CPU accumulation
+                // Ensure GPU operations complete before CPU accumulation
                 // std::cout << "DEBUG: About to sync before CPU proximity accumulation\n";
                 
-                // CRITICAL: Synchronize before CPU accumulation
+                // Synchronize before CPU accumulation
                 CUDA_CHECK_VOID(cudaDeviceSynchronize());
                 
             for (integer_t i = 0; i < nsample * nsample; ++i) {
@@ -4133,7 +4136,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
     // Only runs when: use_rfgap=True AND use_qlora=True
     if (should_compute_rfgap && lowrank_proximity_ptr_out != nullptr) {
         // RF-GAP low-rank proximity computation
-        std::cout << "GPU: RF-GAP proximity computation would run here" << std::endl;
+        // Reserved for future implementation (v2.0)
     }
     
     // Matches backup version - no try-catch

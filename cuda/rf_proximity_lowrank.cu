@@ -351,7 +351,7 @@ __global__ void scale_eigenvector_by_sqrt_eigenvalue_kernel(
 }
 
 // CUDA kernel: Quantize factors from FP32 to NF4 (packed: 2 values per byte)
-// CRITICAL: Avoid atomic operations - use direct writes with proper indexing
+// Avoid atomic operations - use direct writes with proper indexing
 __global__ void quantize_factors_fp32_to_nf4_kernel(
     const dp_t* input_fp32,
     uint8_t* output_nf4,
@@ -479,7 +479,7 @@ bool LowRankProximityMatrix::initialize() {
 
 // Ensure GPU memory is allocated (lazy allocation)
 void LowRankProximityMatrix::ensure_allocated() {
-    // CRITICAL: Thread-safe check - use mutex to prevent race conditions
+    // Thread-safe check - use mutex to prevent race conditions
     std::lock_guard<std::mutex> lock(g_allocated_mutex);
     
     if (A_quantized_gpu_ != nullptr && B_quantized_gpu_ != nullptr) {
@@ -489,19 +489,11 @@ void LowRankProximityMatrix::ensure_allocated() {
     // Aggressive CUDA error clearing before allocation
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        // std::cerr << "Warning: Clearing CUDA error before allocation: " << cudaGetErrorString(err) << std::endl;
+        // Error cleared silently
     }
     
-    // CRITICAL: Skip stream sync - it can cause hangs during accumulation
+    // Skip stream sync - it can cause hangs during accumulation
     // GPU operations will naturally synchronize when needed
-    // cudaError_t sync_err = cudaStreamSynchronize(0);
-    // if (sync_err != cudaSuccess) {
-    //     std::cerr << "Warning: Stream synchronization returned error: " << cudaGetErrorString(sync_err) << std::endl;
-    //     Clear error and continue - sync error might be from previous operations
-    //     cudaGetLastError();
-    // }
-    
-    // Clear errors again after sync
     cudaGetLastError();
     
     // Now allocate memory
@@ -518,7 +510,7 @@ void LowRankProximityMatrix::allocate_gpu_memory() {
     // Aggressive CUDA error clearing and context validation
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
-        // std::cerr << "Warning: Clearing CUDA error before allocation: " << cudaGetErrorString(err) << std::endl;
+        // Error cleared silently
     }
     
     // Ensure CUDA context is ready
@@ -527,14 +519,13 @@ void LowRankProximityMatrix::allocate_gpu_memory() {
     if (device_err != cudaSuccess) {
         device_err = cudaSetDevice(0);
         if (device_err != cudaSuccess) {
-            // std::cerr << "Error: Failed to set CUDA device: " << cudaGetErrorString(device_err) << std::endl;
             // Silently return - CUDA device not available (don't throw in Jupyter)
             return;
         }
         device = 0;
     }
     
-    // CRITICAL: Skip stream sync - it can cause hangs during accumulation
+    // Skip stream sync - it can cause hangs during accumulation
     // GPU operations will naturally synchronize when needed
     // cudaError_t sync_err = cudaStreamSynchronize(0);
     // if (sync_err != cudaSuccess) {
@@ -802,7 +793,7 @@ void LowRankProximityMatrix::add_tree_contribution_incremental_upper_triangle(
 
 // Ensure cuBLAS/cuSolver handles are created (lazy initialization)
 void LowRankProximityMatrix::ensure_handles() {
-    // CRITICAL: Thread-safe check - use mutex to prevent race conditions
+    // Thread-safe check - use mutex to prevent race conditions
     std::lock_guard<std::mutex> lock(g_handles_mutex);
     
     // If handles already exist, nothing to do
@@ -876,13 +867,13 @@ void LowRankProximityMatrix::perform_rank1_svd_from_upper_triangle_fp16(const __
     // Ensure handles are created (lazy initialization)
     ensure_handles();
     
-    // CRITICAL: If we have quantized buffers, dequantize them first to get full-precision A_gpu_/B_gpu_
+    // If we have quantized buffers, dequantize them first to get full-precision A_gpu_/B_gpu_
     // This is needed because accumulation requires full precision
     if (A_quantized_gpu_ && B_quantized_gpu_ && !A_gpu_ && !B_gpu_ && rank_ > 0) {
         dequantize_factors();
     }
     
-    // CRITICAL: Skip host copy check - it causes hangs
+    // Skip host copy check - it causes hangs
     // We'll proceed with SVD even if matrix is all zeros (it will just produce zero factors)
     // The SVD itself is fast enough that checking isn't worth the hang risk
     
@@ -895,7 +886,7 @@ void LowRankProximityMatrix::perform_rank1_svd_from_upper_triangle_fp16(const __
     CUDA_CHECK_VOID(cudaMalloc(&v_gpu, nsample * sizeof(dp_t)));
     CUDA_CHECK_VOID(cudaMalloc(&temp_vec, nsample * sizeof(dp_t)));
     
-    // CRITICAL: cudaMalloc does NOT zero-initialize! We must explicitly zero the memory
+    // cudaMalloc does NOT zero-initialize! We must explicitly zero the memory
     CUDA_CHECK_VOID(cudaMemset(u_gpu, 0, nsample * sizeof(dp_t)));
     CUDA_CHECK_VOID(cudaMemset(v_gpu, 0, nsample * sizeof(dp_t)));
     CUDA_CHECK_VOID(cudaMemset(temp_vec, 0, nsample * sizeof(dp_t)));
@@ -950,14 +941,14 @@ void LowRankProximityMatrix::perform_rank1_svd_from_upper_triangle_fp16(const __
     
     // std::cout << "[DEBUG LOWRANK SVD] sigma=" << sigma << ", sqrt_sigma=" << sqrt(sigma) << std::endl;
     
-    // CRITICAL: Skip host copy check - it causes hangs
+    // Skip host copy check - it causes hangs
     // We'll proceed with SVD even if u_gpu is all zeros (it will just produce zero factors)
     
     // Update factors: A_new = [A_old, sqrt(sigma) * u], B_new = [B_old, sqrt(sigma) * u]
     // For symmetric matrix, u ≈ v
     dp_t sqrt_sigma = sqrt(sigma);
     
-    // CRITICAL: If sigma is too small, skip this tree (would produce near-zero factors)
+    // If sigma is too small, skip this tree (would produce near-zero factors)
     if (sigma < 1e-10) {
         // Clean up and return
         if (u_gpu) { cudaError_t err = cudaFree(u_gpu); if (err != cudaSuccess) cudaGetLastError(); }
@@ -973,20 +964,20 @@ void LowRankProximityMatrix::perform_rank1_svd_from_upper_triangle_fp16(const __
         CUDA_CHECK_VOID(cudaMalloc(&A_gpu_, nsample * rank_ * sizeof(dp_t)));
         CUDA_CHECK_VOID(cudaMalloc(&B_gpu_, nsample * rank_ * sizeof(dp_t)));
         
-        // CRITICAL: Skip cudaMemset - cuBLAS copy will overwrite, memset causes implicit sync
+        // Skip cudaMemset - cuBLAS copy will overwrite, memset causes implicit sync
         
         // Copy u_gpu to A_gpu_, scaled by sqrt_sigma
         cublasDcopy(cublas_handle_, nsample, u_gpu, 1, A_gpu_, 1);
         dp_t scale = sqrt_sigma;
         cublasDscal(cublas_handle_, nsample, &scale, A_gpu_, 1);
         
-        // CRITICAL: Copy A to B to ensure symmetry (A = B for symmetric proximity matrix)
+        // Copy A to B to ensure symmetry (A = B for symmetric proximity matrix)
         cublasDcopy(cublas_handle_, nsample, A_gpu_, 1, B_gpu_, 1);
         // Note: No explicit sync - cuBLAS operations will complete naturally
         
         // Factors stored successfully
     } else if (rank_ >= max_rank_) {
-        // CRITICAL: When at max rank, accumulate into existing factors instead of discarding
+        // When at max rank, accumulate into existing factors instead of discarding
         // Add new tree's contribution to a cycling column (round-robin update)
         // This ensures all trees contribute to the final factors
         
@@ -1008,8 +999,11 @@ void LowRankProximityMatrix::perform_rank1_svd_from_upper_triangle_fp16(const __
         integer_t col_idx = trees_processed_ % max_rank_;
         
         // Add the new eigenvector to the selected column (weighted average)
-        // New column = alpha * old_column + (1-alpha) * new_contribution
-        // Using alpha = (trees_in_col - 1) / trees_in_col for proper averaging
+        // Formula: new_col = (trees_in_col-1)/trees_in_col * old_col + 1/trees_in_col * new_contribution
+        // This ensures all trees contribute equally (proper statistical averaging)
+        //
+        // The per-tree quantization bug has been fixed (only quantize once at end),
+        // so this linear averaging now works correctly without precision loss!
         integer_t trees_in_col = (trees_processed_ / max_rank_) + 1;
         dp_t alpha = static_cast<dp_t>(trees_in_col - 1) / static_cast<dp_t>(trees_in_col);
         dp_t beta = sqrt_sigma / static_cast<dp_t>(trees_in_col);
@@ -1033,7 +1027,7 @@ void LowRankProximityMatrix::perform_rank1_svd_from_upper_triangle_fp16(const __
         CUDA_CHECK_VOID(cudaMalloc(&A_new, nsample * new_rank * sizeof(dp_t)));
         CUDA_CHECK_VOID(cudaMalloc(&B_new, nsample * new_rank * sizeof(dp_t)));
         
-        // CRITICAL: Skip cudaMemset - cuBLAS copy will overwrite, memset causes implicit sync
+        // Skip cudaMemset - cuBLAS copy will overwrite, memset causes implicit sync
         
         // Copy old factors using cuBLAS (async, no blocking)
         if (rank_ > 0) {
@@ -1049,12 +1043,12 @@ void LowRankProximityMatrix::perform_rank1_svd_from_upper_triangle_fp16(const __
         cublasDcopy(cublas_handle_, nsample, u_gpu, 1, B_new + nsample * rank_, 1);
         cublasDscal(cublas_handle_, nsample, &scale, B_new + nsample * rank_, 1);
         
-        // CRITICAL: Ensure A = B for symmetric proximity matrix (P = A @ B.T should be symmetric)
+        // Ensure A = B for symmetric proximity matrix (P = A @ B.T should be symmetric)
         // Copy A to B to ensure symmetry: B = A
         cublasDcopy(cublas_handle_, nsample * new_rank, A_new, 1, B_new, 1);
         // Note: No explicit sync - cuBLAS operations will complete naturally
         
-        // CRITICAL: Don't free old buffers immediately - cudaFree can cause implicit sync and hangs
+        // Don't free old buffers immediately - cudaFree can cause implicit sync and hangs
         // Defer freeing to avoid hangs during accumulation
         // Store old pointers for deferred cleanup (they'll be freed in destructor)
         A_gpu_ = A_new;
@@ -1064,28 +1058,14 @@ void LowRankProximityMatrix::perform_rank1_svd_from_upper_triangle_fp16(const __
         // Factors extended successfully
     }
     
-    // CRITICAL: Quantize immediately after each tree to save memory
-    // This converts full-precision A_gpu_/B_gpu_ to quantized format and frees the full-precision buffers
-    // Memory savings: INT8 = 8x less (vs double), NF4 = 16x less (vs double)
-    if (current_quant_level_ != QuantizationLevel::FP32 && A_gpu_ && B_gpu_) {
-        quantize_factors(current_quant_level_);
-        
-        // CRITICAL: Don't free A_gpu_/B_gpu_ immediately - cudaFree can cause implicit sync
-        // Instead, just set to nullptr and let them be freed later (or reuse)
-        // The quantized buffers now hold the data, so A_gpu_/B_gpu_ can be freed later
-        // Defer freeing to avoid hangs during accumulation
-        A_gpu_ = nullptr;
-        B_gpu_ = nullptr;
-    }
+    // DO NOT quantize after each tree - causes precision loss!
+    // With 1500 trees, quantizing → dequantizing 1500 times compounds INT8 errors, degrading MDS quality.
+    // Instead, keep full FP32 precision during accumulation and only quantize ONCE at the end.
+    // Memory trade-off: For small datasets (e.g., Wine 178 samples), this is negligible (~1MB extra).
+    // For large datasets (100K+ samples), consider re-enabling per-tree quantization if memory is critical.
     
     // Note: No explicit sync needed - cuBLAS operations will complete naturally
     // The next tree's operations will implicitly wait for previous operations
-    
-    // Cleanup
-    // CRITICAL: Don't free immediately - cudaFree can cause implicit sync and hangs
-    // Defer freeing to avoid hangs during accumulation
-    // These will be freed when the function returns or at the end of accumulation
-    // For now, just leak them (they're small temporary buffers)
     
     trees_processed_++;
 }
@@ -1159,15 +1139,11 @@ void LowRankProximityMatrix::symmetric_matrix_vector_multiply(
 void LowRankProximityMatrix::truncate_rank(integer_t target_rank) {
     if (rank_ <= target_rank) return;
     
-    std::cout << "[DEBUG TRUNCATE] Starting truncate_rank: current rank=" << rank_ << ", target=" << target_rank << std::endl;
-    
     // Ensure handles are created
     ensure_handles();
     
     // Dequantize factors if needed
-    std::cout << "[DEBUG TRUNCATE] About to dequantize factors..." << std::endl;
     dequantize_factors();
-    std::cout << "[DEBUG TRUNCATE] Dequantize completed" << std::endl;
     
     if (!A_gpu_ || !B_gpu_) {
         return;  // Nothing to truncate
@@ -1175,12 +1151,10 @@ void LowRankProximityMatrix::truncate_rank(integer_t target_rank) {
     
     // Reconstruct full matrix P = A × B' (symmetric)
     // Allocate temporary buffer for full matrix
-    std::cout << "[DEBUG TRUNCATE] Allocating full matrix P (" << nsample_ << "x" << nsample_ << ")..." << std::endl;
     dp_t* P_gpu = nullptr;
     CUDA_CHECK_VOID(cudaMalloc(&P_gpu, nsample_ * nsample_ * sizeof(dp_t)));
     
     // Compute P = A × B' using cuBLAS
-    std::cout << "[DEBUG TRUNCATE] Computing P = A × B'..." << std::endl;
     // P is nsample × nsample, A is nsample × rank_, B is nsample × rank_
     // P = A × B' → CUBLAS_OP_N for A, CUBLAS_OP_T for B
     const dp_t alpha = 1.0;
@@ -1195,11 +1169,9 @@ void LowRankProximityMatrix::truncate_rank(integer_t target_rank) {
                 P_gpu, nsample_);
     
     CUDA_CHECK_VOID(cudaStreamSynchronize(0));  // Use stream sync for Jupyter safety
-    std::cout << "[DEBUG TRUNCATE] P = A × B' completed" << std::endl;
     
     // Perform eigendecomposition (symmetric matrix)
     // Since P is symmetric, eigenvalues = singular values
-    std::cout << "[DEBUG TRUNCATE] Starting eigendecomposition..." << std::endl;
     dp_t* S_gpu = nullptr;
     CUDA_CHECK_VOID(cudaMalloc(&S_gpu, nsample_ * sizeof(dp_t)));
     
@@ -1308,9 +1280,22 @@ void LowRankProximityMatrix::truncate_rank(integer_t target_rank) {
 }
 
 // Finalize accumulation
-void LowRankProximityMatrix::finalize_accumulation(integer_t n_trees_processed) {
+void LowRankProximityMatrix::finalize_accumulation(integer_t n_trees_processed, bool final_call) {
     trees_processed_ = n_trees_processed;
-    // Factors are already quantized, nothing more to do
+    
+    // ONLY quantize on the FINAL call (after ALL batches complete)
+    // This prevents repeated quantize→dequantize cycles across batches
+    // Example: 1500 trees with batch_size=100 = 15 batches
+    //   Old: 15 quantize→dequantize cycles (precision loss!)
+    //   New: Keep FP32 for all 15 batches, quantize once at the end
+    if (final_call && current_quant_level_ != QuantizationLevel::FP32 && A_gpu_ && B_gpu_) {
+        quantize_factors(current_quant_level_);
+        // Free FP32 buffers after quantization (now in quantized format)
+        if (A_gpu_) { cudaError_t err = cudaFree(A_gpu_); if (err != cudaSuccess) cudaGetLastError(); }
+        if (B_gpu_) { cudaError_t err = cudaFree(B_gpu_); if (err != cudaSuccess) cudaGetLastError(); }
+        A_gpu_ = nullptr;
+        B_gpu_ = nullptr;
+    }
 }
 
 // Get accumulated proximity matrix
@@ -1320,7 +1305,7 @@ void LowRankProximityMatrix::get_accumulated_proximity(dp_t* output_prox, intege
 
 // Reconstruct full matrix
 void LowRankProximityMatrix::reconstruct_full_matrix(dp_t* output_prox, integer_t nsample, QuantizationLevel quant_level) {
-    // CRITICAL WARNING: Reconstructing full proximity matrix requires O(n²) memory!
+    // WARNING: Reconstructing full proximity matrix requires O(n²) memory!
     // For large datasets, this can easily exceed available GPU/host memory and crash the system.
     // Example: 100k samples = 100k × 100k × 8 bytes = ~80 GB (double precision)
     // 
@@ -1380,7 +1365,7 @@ void LowRankProximityMatrix::reconstruct_full_matrix(dp_t* output_prox, integer_
     
     CUDA_CHECK_VOID(cudaStreamSynchronize(0));  // Use stream sync for Jupyter safety
     
-    // CRITICAL: Set diagonal to 1.0 (each sample is 100% similar to itself)
+    // Set diagonal to 1.0 (each sample is 100% similar to itself)
     // Column-major: diagonal is at output_prox[i + i * nsample]
     int threads_per_block_diag = 256;
     int blocks_diag = (nsample + threads_per_block_diag - 1) / threads_per_block_diag;
@@ -1430,7 +1415,7 @@ void LowRankProximityMatrix::quantize_factors(QuantizationLevel quant_level) {
         return;
     }
     
-    // CRITICAL: During accumulation, we already have full-precision A_gpu_/B_gpu_ from SVD
+    // During accumulation, we already have full-precision A_gpu_/B_gpu_ from SVD
     // We don't need to dequantize - just quantize the existing full-precision buffers directly
     // Dequantization only happens when we need full precision (e.g., reconstructing proximity matrix)
     // This avoids host copies that cause hangs during accumulation
@@ -1461,11 +1446,11 @@ void LowRankProximityMatrix::quantize_factors(QuantizationLevel quant_level) {
                 B_gpu_, static_cast<__half*>(B_quantized_new), factor_size
             );
             // Note: No explicit sync - kernel will complete naturally
-            // CRITICAL: No host copy for debug checks - they cause hangs
+            // No host copy for debug checks - they cause hangs
             break;
         }
         case QuantizationLevel::INT8: {
-            // CRITICAL: Use same scaling parameters for A and B to maintain symmetry
+            // Use same scaling parameters for A and B to maintain symmetry
             // Compute scaling entirely on device - no host copies
             // Allocate device memory for scale/zero_point if not already allocated
             bool first_quantization = (d_A_scale_ == nullptr);
@@ -1476,7 +1461,7 @@ void LowRankProximityMatrix::quantize_factors(QuantizationLevel quant_level) {
                 CUDA_CHECK_VOID(cudaMalloc(&d_B_zero_point_, sizeof(float)));
             }
             
-            // CRITICAL FIX: Only compute scale on FIRST tree to avoid cumulative quantization error
+            // Only compute scale on FIRST tree to avoid cumulative quantization error
             // Subsequent trees use the same scale, which prevents precision loss from compounding
             // The first tree's data range is representative since proximity values are bounded [0,1]
             if (first_quantization) {
@@ -1485,7 +1470,7 @@ void LowRankProximityMatrix::quantize_factors(QuantizationLevel quant_level) {
                     A_gpu_, factor_size, d_A_scale_, d_A_zero_point_
                 );
                 
-                // CRITICAL: Must sync before D2D copy - scaling kernel must finish writing d_A_scale_
+                // Must sync before D2D copy - scaling kernel must finish writing d_A_scale_
                 // before we copy it to d_B_scale_
                 CUDA_CHECK_VOID(cudaStreamSynchronize(0));
                 
@@ -1513,7 +1498,7 @@ void LowRankProximityMatrix::quantize_factors(QuantizationLevel quant_level) {
                 d_B_scale_, d_B_zero_point_
             );
             
-            // CRITICAL: Don't copy scale/zero_point to host during accumulation - it causes hangs
+            // Don't copy scale/zero_point to host during accumulation - it causes hangs
             // Keep them on device - they're stored in d_A_scale_, d_A_zero_point_, etc.
             // Only copy to host values if absolutely needed (defer to end)
             // For now, use default values in host variables (they're not used during accumulation)
@@ -1529,10 +1514,10 @@ void LowRankProximityMatrix::quantize_factors(QuantizationLevel quant_level) {
             size_t size = packed_size * sizeof(uint8_t);
             CUDA_CHECK_VOID(cudaMalloc(&A_quantized_new, size));
             CUDA_CHECK_VOID(cudaMalloc(&B_quantized_new, size));
-            // CRITICAL: Skip cudaMemset - kernel will write all values anyway, memset causes implicit sync
+            // Skip cudaMemset - kernel will write all values anyway, memset causes implicit sync
             
             // Quantize factors from FP32 to NF4 using GPU kernel
-            // CRITICAL: No atomic operations - direct writes to avoid contention
+            // No atomic operations - direct writes to avoid contention
             dim3 block_size(256);
             dim3 grid_size((packed_size + block_size.x - 1) / block_size.x);
             
@@ -1552,7 +1537,7 @@ void LowRankProximityMatrix::quantize_factors(QuantizationLevel quant_level) {
     }
     
     // Replace old quantized buffers
-    // CRITICAL: Don't free old buffers immediately - cudaFree can cause implicit sync and hangs
+    // Don't free old buffers immediately - cudaFree can cause implicit sync and hangs
     // Defer freeing to avoid hangs during accumulation
     // Store old pointers for deferred cleanup (they'll be freed in destructor)
     void* A_quantized_old = A_quantized_gpu_;
@@ -1581,7 +1566,7 @@ void LowRankProximityMatrix::dequantize_factors() {
         }
         
         // Otherwise, if quantized buffers exist and are valid, convert from FP16 to FP32
-        // CRITICAL: Do this entirely on GPU to avoid host copies that cause hangs
+        // Do this entirely on GPU to avoid host copies that cause hangs
         if (A_quantized_gpu_ && B_quantized_gpu_ && factor_size > 0) {
             // Verify pointers are valid device pointers before attempting copy
             cudaPointerAttributes attrs_A, attrs_B;
@@ -1638,7 +1623,7 @@ void LowRankProximityMatrix::dequantize_factors() {
         return;
     }
     
-    // CRITICAL: If quantized buffers exist, we MUST dequantize from them to A_gpu_/B_gpu_
+    // If quantized buffers exist, we MUST dequantize from them to A_gpu_/B_gpu_
     // This ensures we get the correct values even if A_gpu_/B_gpu_ exist (they might be stale)
     // Allocate A_gpu_ and B_gpu_ if they don't exist
     if (!A_gpu_ || !B_gpu_) {
@@ -1650,7 +1635,7 @@ void LowRankProximityMatrix::dequantize_factors() {
         case QuantizationLevel::FP16: {
             std::vector<__half> A_fp16(factor_size), B_fp16(factor_size);
             
-            // CRITICAL: Skip host copies - convert directly on GPU
+            // Skip host copies - convert directly on GPU
             // Allocate FP32 buffers if not already allocated
             if (!A_gpu_) {
                 CUDA_CHECK_VOID(cudaMalloc(&A_gpu_, factor_size * sizeof(dp_t)));
@@ -1774,7 +1759,7 @@ void LowRankProximityMatrix::get_factors(dp_t** A_gpu, dp_t** B_gpu, integer_t* 
     
     dequantize_factors();
     
-    // CRITICAL: Ensure A = B for symmetric proximity matrix (P = A @ B.T should be symmetric)
+    // Ensure A = B for symmetric proximity matrix (P = A @ B.T should be symmetric)
     // For symmetric matrix, we need A = B so that P = A @ A.T is symmetric
     if (A_gpu_ != nullptr && B_gpu_ != nullptr && rank_ > 0) {
         ensure_handles();
@@ -1982,7 +1967,7 @@ std::vector<double> LowRankProximityMatrix::compute_mds_from_factors(integer_t k
     // For normalized proximity matrices, max_prox should be 1.0 (diagonal elements)
     // But for low-rank factors, values might not be normalized, so we compute max
     // Compute max of diagonal elements: P[i,i] = A[i,:] · B[i,:]^T
-    // CRITICAL: Do this entirely on GPU to avoid host copies that cause hangs
+    // Do this entirely on GPU to avoid host copies that cause hangs
     dp_t* diagonal_gpu = nullptr;
     CUDA_CHECK_VOID(cudaMalloc(&diagonal_gpu, nsample_ * sizeof(dp_t)));
     
@@ -2039,7 +2024,7 @@ std::vector<double> LowRankProximityMatrix::compute_mds_from_factors(integer_t k
     // A_sum = sum of columns: A^T × ones(n) where ones(n) is all-ones vector
     dp_t* ones_gpu = nullptr;
     CUDA_CHECK_VOID(cudaMalloc(&ones_gpu, nsample_ * sizeof(dp_t)));
-    // CRITICAL FIX: cudaMemset sets BYTES, not double values!
+    // cudaMemset sets BYTES, not double values!
     // Create ones vector on host and copy to GPU
     std::vector<dp_t> ones_host(nsample_, 1.0);
     CUDA_CHECK_VOID(cudaMemcpy(ones_gpu, ones_host.data(), nsample_ * sizeof(dp_t), cudaMemcpyHostToDevice));
@@ -2317,7 +2302,7 @@ std::vector<double> LowRankProximityMatrix::compute_mds_from_factors(integer_t k
             cublasDscal(cublas_handle_, nsample_, &inv_norm, v_gpu, 1);
         }
         
-        // CRITICAL: Orthogonalize initial vector against ALL previous eigenvectors
+        // Orthogonalize initial vector against ALL previous eigenvectors
         // This ensures we start in the orthogonal complement and find a new eigenvector
         for (int prev = 0; prev < eig_idx; prev++) {
             dp_t* prev_eig = eigenvectors_gpu + prev * nsample_;

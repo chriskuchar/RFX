@@ -193,7 +193,7 @@ __global__ void cuda_proximity_upper_triangle_fp16_kernel(
     
     for (int sample_n = tid; sample_n < nsample; sample_n += stride) {
         threads_processed++;
-        // CRITICAL: Match CPU implementation - only process OOB samples (nin[sample_n] == 0)
+        // Match CPU implementation - only process OOB samples (nin[sample_n] == 0)
         // CPU code (rf_proximity.cpp line 180): if (nin[n] == 0) { // OOB sample
         // The proximity matrix measures how often OOB samples co-occur with in-bag samples
         if (nin[sample_n] > 0) {
@@ -323,7 +323,7 @@ __global__ void cuda_proximity_upper_triangle_int8_kernel(
     for (int sample_n = tid; sample_n < nsample; sample_n += stride) {
         integer_t k = nodexb[sample_n];
         
-        // CRITICAL: Validate k before using it in ndbegin[k]
+        // Validate k before using it in ndbegin[k]
         // Invalid nodexb values (-1) would cause out-of-bounds access
         if (k < 0 || k >= nterm) continue;
         
@@ -352,7 +352,7 @@ __global__ void cuda_proximity_upper_triangle_int8_kernel(
                     int8_t quantized_weight = QuantizationUtils::fp32_to_int8(weight_contrib, scale, zero_point);
                     integer_t upper_idx = upper_triangle_index(i, j_idx, nsample);
                     
-                    // CRITICAL: atomicAdd on int* requires 4-byte alignment
+                    // atomicAdd on int* requires 4-byte alignment
                     // Align to 4-byte boundary and update the specific byte within the word
                     int32_t* word_ptr = reinterpret_cast<int32_t*>(&prox_upper_int8[upper_idx & ~3]);  // Align to 4-byte boundary
                     int byte_offset = upper_idx & 3;  // Byte offset within word (0-3)
@@ -450,7 +450,7 @@ __global__ void cuda_proximity_upper_triangle_nf4_kernel(
     
     for (int sample_n = tid; sample_n < nsample; sample_n += stride) {
         threads_processed++;
-        // CRITICAL: Match CPU implementation - only process OOB samples (nin[sample_n] == 0)
+        // Match CPU implementation - only process OOB samples (nin[sample_n] == 0)
         if (nin[sample_n] > 0) {
             continue;  // Skip in-bag samples - only process OOB samples
         }
@@ -492,7 +492,7 @@ __global__ void cuda_proximity_upper_triangle_nf4_kernel(
             for (integer_t j = start_idx; j < end_idx; j++) {
                 if (j < 0 || j >= nsample) continue;  // Bounds check for npcase access
                 integer_t kk = npcase[j];
-                // CRITICAL: For OOB sample_n, update proximity with in-bag sample kk
+                // For OOB sample_n, update proximity with in-bag sample kk
                 if (kk >= 0 && kk < nsample && nin[kk] > 0) {
                     // For upper triangle, we need i <= j
                     // If sample_n <= kk, use (sample_n, kk)
@@ -517,7 +517,7 @@ __global__ void cuda_proximity_upper_triangle_nf4_kernel(
                         // Bounds check for packed_idx
                         integer_t max_packed_idx = ((nsample * (nsample + 1)) / 2 + 1) / 2 - 1;
                         if (packed_idx >= 0 && packed_idx <= max_packed_idx) {
-                            // CRITICAL: atomicCAS requires 4-byte alignment
+                            // atomicCAS requires 4-byte alignment
                             // Align to 4-byte boundary and update the specific byte within the word
                             uint32_t* word_ptr = reinterpret_cast<uint32_t*>(&prox_upper_nf4[packed_idx & ~3]);  // Align to 4-byte boundary
                             int byte_offset = packed_idx & 3;  // Byte offset within word (0-3)
@@ -616,7 +616,6 @@ void gpu_proximity_upper_triangle_fp16(
     int device_count;
     cudaGetDeviceCount(&device_count);
     if (device_count == 0) {
-        // std::cout << "[DEBUG PROXIMITY FP16] No GPU available, returning" << std::endl;
         return;
     }
     // std::cout << "gpu_proximity_upper_triangle_fp16: GPU available, device_count=" << device_count << std::endl;
@@ -627,7 +626,7 @@ void gpu_proximity_upper_triangle_fp16(
     // std::cout << "gpu_proximity_upper_triangle_fp16: Allocating workspace arrays..." << std::endl;
     // std::cout.flush();
     std::vector<integer_t> nod_local(nnode);
-    // CRITICAL: ncount_local must be size nterm (number of terminal nodes), not nsample!
+    // ncount_local must be size nterm (number of terminal nodes), not nsample!
     // We'll resize it after computing nterm
     std::vector<integer_t> ncount_local;
     std::vector<integer_t> ncn_local(nsample);
@@ -641,7 +640,7 @@ void gpu_proximity_upper_triangle_fp16(
     // Compute nod (terminal node mapping) first to get nterm
     integer_t nterm = 0;
     
-    // CRITICAL: Validate nnode before using it
+    // Validate nnode before using it
     if (nnode <= 0) {
         // Silently return - invalid nnode (don't print errors in Jupyter)
         return;
@@ -656,10 +655,10 @@ void gpu_proximity_upper_triangle_fp16(
         }
     }
     
-    // CRITICAL: Now that we know nterm, resize ncount_local to the correct size
+    // Now that we know nterm, resize ncount_local to the correct size
     // ncount[k] counts in-bag samples in terminal node k, so we need nterm elements
     ncount_local.resize(nterm, 0);
-    // CRITICAL: Validate inputs before proceeding
+    // Validate inputs before proceeding
     if (nodextr == nullptr || nodestatus == nullptr) {
         // Silently return - null pointers (don't print errors in Jupyter)
         return;
@@ -682,7 +681,7 @@ void gpu_proximity_upper_triangle_fp16(
     }
     
     // Compute nodexb and ncount
-    // CRITICAL: Compute nodexb for ALL samples (both in-bag and OOB)
+    // Compute nodexb for ALL samples (both in-bag and OOB)
     // The kernel will filter to only process OOB samples, but nodexb must be valid for all
     // This matches the backup implementations (Fortran and C++ backup)
     integer_t valid_nodexb_count = 0;
@@ -729,19 +728,19 @@ void gpu_proximity_upper_triangle_fp16(
     ndbegin_local.resize(nterm + 1, 0);
     
     // Compute ndbegin
-    // CRITICAL: ndbegin[k] is the starting index in npcase for terminal node k
+    // ndbegin[k] is the starting index in npcase for terminal node k
     // ndbegin[k+1] - ndbegin[k] = ncount[k] (number of in-bag samples in node k)
     // ndbegin[0] = 0, ndbegin[nterm] = total number of in-bag samples (should be <= nsample)
     if (nterm > 0) {
         ndbegin_local[0] = 0;
         for (integer_t k = 1; k <= nterm; ++k) {
-            // CRITICAL: Ensure ncount[k-1] is non-negative (it should be, but validate)
+            // Ensure ncount[k-1] is non-negative (it should be, but validate)
             integer_t count = (k-1 < nterm) ? ncount_local[k-1] : 0;
             if (count < 0) count = 0;  // Safety: ensure non-negative
             ndbegin_local[k] = ndbegin_local[k-1] + count;
         }
         
-        // CRITICAL: Validate that ndbegin[nterm] <= nsample
+        // Validate that ndbegin[nterm] <= nsample
         // This ensures we don't exceed array bounds when accessing npcase
         // ndbegin[nterm] is the total number of in-bag samples across all terminal nodes
         // It should never exceed nsample (total number of samples)
@@ -774,7 +773,7 @@ void gpu_proximity_upper_triangle_fp16(
     // DEBUG output removed for Jupyter stability - debug statements can cause kernel crashes
     
     // Compute npcase
-    // CRITICAL: Build npcase for ALL samples (both in-bag and OOB) with valid nodexb
+    // Build npcase for ALL samples (both in-bag and OOB) with valid nodexb
     // This matches the CPU implementation (rf_proximity.cpp line 161-171)
     // CPU code adds ALL samples where k >= 0 && k < nterm, regardless of ncn[n]
     // However, ncn[n] is 0 for OOB samples, so kn = ndbegin[k] + ncn[n] - 1 = ndbegin[k] - 1
@@ -1038,7 +1037,7 @@ void gpu_proximity_upper_triangle_fp16(
     // Get use_casewise from global config
     bool use_casewise = rf::g_config.use_casewise;
     
-    // CRITICAL: Validate all parameters before kernel launch to prevent "invalid argument" errors
+    // Validate all parameters before kernel launch to prevent "invalid argument" errors
     // This is especially important in Jupyter where errors can crash the kernel
     if (nsample <= 0) {
         // Silently return - invalid nsample (don't print errors in Jupyter)
@@ -1103,7 +1102,7 @@ void gpu_proximity_upper_triangle_fp16(
     dim3 block_size(256);
     dim3 grid_size((nsample + block_size.x - 1) / block_size.x);
     
-    // CRITICAL: Ensure grid_size is at least 1 (CUDA requires at least 1 block)
+    // Ensure grid_size is at least 1 (CUDA requires at least 1 block)
     if (grid_size.x == 0) {
         grid_size.x = 1;
     }
@@ -1131,7 +1130,7 @@ void gpu_proximity_upper_triangle_fp16(
     //     std::cerr << "[ERROR] Kernel launch failed: " << cudaGetErrorString(kernel_err) << std::endl;
     // }
     
-    // CRITICAL: Synchronize to ensure kernel completes before checking results
+    // Synchronize to ensure kernel completes before checking results
     cudaError_t sync_err = cudaDeviceSynchronize();
     // if (sync_err != cudaSuccess) {
     //     std::cerr << "[ERROR] Kernel sync failed: " << cudaGetErrorString(sync_err) << std::endl;
@@ -1403,7 +1402,7 @@ void gpu_proximity_upper_triangle_nf4(
         return;
     }
     
-    // CRITICAL: Compute workspace arrays first (same as FP16 version)
+    // Compute workspace arrays first (same as FP16 version)
     // These arrays are NOT pre-computed - we need to compute them here
     std::vector<integer_t> nod_local(nnode);
     std::vector<integer_t> ncount_local(nsample);
@@ -1524,7 +1523,7 @@ void gpu_proximity_upper_triangle_nf4(
     dim3 block_size(256);
     dim3 grid_size((nsample + block_size.x - 1) / block_size.x);
     
-    // CRITICAL: Ensure grid_size is at least 1 (CUDA requires at least 1 block)
+    // Ensure grid_size is at least 1 (CUDA requires at least 1 block)
     if (grid_size.x == 0) {
         grid_size.x = 1;
     }
@@ -1551,7 +1550,7 @@ void gpu_proximity_upper_triangle_nf4(
         return;  // Early return on launch failure
     }
     
-    // CRITICAL: Synchronize to ensure kernel completes and printf output appears
+    // Synchronize to ensure kernel completes and printf output appears
     cudaError_t sync_err = cudaDeviceSynchronize();
     if (sync_err != cudaSuccess) {
         // std::cerr << "[ERROR] NF4 kernel sync failed (kernel may have crashed): " 

@@ -161,19 +161,9 @@ void gpu_finishprox(integer_t nsample, const integer_t* nout, dp_t* prox, dp_t* 
             dim3 quant_grid_size((nsample * nsample + quant_block_size.x - 1) / quant_block_size.x);
             // cuda_fp32_to_fp16_kernel<<<quant_grid_size, quant_block_size>>>(prox_d, prox_quantized, nsample * nsample);
         } else if (quant_level == rf::cuda::QuantizationLevel::INT8) {
-            // Convert FP32 to INT8 with scaling
-            float scale, zero_point;
-            // Compute scaling parameters from data
-            dp_t min_val, max_val;
-            cudaMemcpy(&min_val, prox_d, sizeof(dp_t), cudaMemcpyDeviceToHost);
-            cudaMemcpy(&max_val, prox_d + nsample * nsample - 1, sizeof(dp_t), cudaMemcpyDeviceToHost);
-            
-            scale = (max_val - min_val) / 255.0f;
-            zero_point = -min_val / scale;
-            
-            dim3 quant_block_size(256);
-            dim3 quant_grid_size((nsample * nsample + quant_block_size.x - 1) / quant_block_size.x);
-            // cuda_fp32_to_int8_kernel<<<quant_grid_size, quant_block_size>>>(prox_d, prox_quantized, nsample * nsample, scale, zero_point);
+            // INT8 quantization for full proximity matrices is not implemented
+            // INT8 is only used for QLORA low-rank factors (see rf_proximity_lowrank.cu)
+            // Full matrix INT8 quantization would require implementing cuda_fp32_to_int8_kernel
         }
         
         // Quantize symmetric proximity matrix
@@ -182,9 +172,8 @@ void gpu_finishprox(integer_t nsample, const integer_t* nout, dp_t* prox, dp_t* 
             dim3 quant_grid_size((nsample * nsample + quant_block_size.x - 1) / quant_block_size.x);
             // cuda_fp32_to_fp16_kernel<<<quant_grid_size, quant_block_size>>>(proxsym_d, proxsym_quantized, nsample * nsample);
         } else if (quant_level == rf::cuda::QuantizationLevel::INT8) {
-            dim3 quant_block_size(256);
-            dim3 quant_grid_size((nsample * nsample + quant_block_size.x - 1) / quant_block_size.x);
-            // cuda_fp32_to_int8_kernel<<<quant_grid_size, quant_block_size>>>(proxsym_d, proxsym_quantized, nsample * nsample, scale, zero_point);
+            // INT8 quantization for full proximity matrices is not implemented
+            // INT8 is only used for QLORA low-rank factors (see rf_proximity_lowrank.cu)
         }
         
         // Cleanup quantized arrays

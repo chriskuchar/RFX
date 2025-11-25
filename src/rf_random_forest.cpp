@@ -22,7 +22,7 @@
 #include <omp.h>
 #endif
 
-// CRITICAL: Avoid including CUDA headers directly in .cpp file to prevent static initialization issues
+// Avoid including CUDA headers directly in .cpp file to prevent static initialization issues
 // Use forward declarations for GPU functions - they're in separate .cu files that are compiled separately
 // Include only CPU headers
 #include "rf_growtree.hpp"  // CPU tree growing functions (cpu_growtree_wrapper)
@@ -98,12 +98,10 @@ void train_test_split(const real_t* X, const void* y, integer_t nsamples, intege
     
     // Validate inputs
     if (!X || !y || !X_train || !y_train || !X_test || !y_test) {
-        // std::cout << "ERROR: Null pointer in train_test_split" << std::endl;
         return;
     }
     
     if (nsamples <= 0 || mdim <= 0 || test_size <= 0.0 || test_size >= 1.0) {
-        // std::cout << "ERROR: Invalid parameters in train_test_split" << std::endl;
         return;
     }
     
@@ -113,7 +111,6 @@ void train_test_split(const real_t* X, const void* y, integer_t nsamples, intege
     
     // Validate split sizes
     if (n_train <= 0 || n_test <= 0 || n_train >= nsamples || n_test >= nsamples) {
-        // std::cout << "ERROR: Invalid split sizes: n_train=" << n_train << ", n_test=" << n_test << ", nsamples=" << nsamples << std::endl;
         return;
     }
     
@@ -138,7 +135,6 @@ void train_test_split(const real_t* X, const void* y, integer_t nsamples, intege
     for (integer_t i = 0; i < n_train; i++) {
         integer_t idx = indices[i];
         if (idx < 0 || idx >= nsamples) {
-            // std::cout << "ERROR: Invalid index " << idx << " in train split" << std::endl;
             return;
         }
         // Copy features
@@ -152,7 +148,6 @@ void train_test_split(const real_t* X, const void* y, integer_t nsamples, intege
     for (integer_t i = 0; i < n_test; i++) {
         integer_t idx = indices[n_train + i];
         if (idx < 0 || idx >= nsamples) {
-            // std::cout << "ERROR: Invalid index " << idx << " in test split" << std::endl;
             return;
         }
         // Copy features
@@ -162,8 +157,6 @@ void train_test_split(const real_t* X, const void* y, integer_t nsamples, intege
         // Copy labels - cast through real_t first to handle float input
         static_cast<integer_t*>(y_test)[i] = static_cast<integer_t>(static_cast<const real_t*>(y)[idx]);
     }
-    
-    // std::cout << "Train-test split: " << n_train << " train, " << n_test << " test samples\n";  // Commented to avoid stream conflicts with Python progress bars
 }
 
 // Helper function to get memory information
@@ -257,25 +250,7 @@ void print_memory_info(integer_t nsample, integer_t mdim, integer_t ntree, integ
             std::cout << "📈 GPU Memory Safety: ⚠️  Unable to verify\n";
         }
         */
-    } else {
-        // Commented out to avoid stream conflicts with Python progress bars
-        // std::cout << "\n💻 CPU MEMORY INFORMATION\n";
-        // std::cout << "==================================================\n";
-        // std::cout << "📊 System Memory:\n";
-        // std::cout << "   Total: " << std::fixed << std::setprecision(1) << total_mem_mb << " MB\n";
-        // std::cout << "   Available: " << available_mem_mb << " MB\n";
-        // std::cout << "   Used: " << used_mem_mb << " MB\n";
-        // std::cout << "\n";
-        // std::cout << "📈 Estimated CPU Training Memory: " << estimated_mb << " MB\n";
-        // std::cout << "📈 CPU Memory Usage: " << (estimated_mb / available_mem_mb * 100) << "% of available\n";
-        // 
-        // if (estimated_mb < available_mem_mb * 0.8) {
-        //     std::cout << "📈 CPU Memory Safety: ✅ SAFE\n";
-        // } else {
-        //     std::cout << "📈 CPU Memory Safety: ⚠️  HIGH USAGE\n";
-        // }
     }
-    // std::cout << "\n";  // Commented to avoid stream conflicts with Python progress bars
 }
 
 // Train-test split method (like XGBoost) - now just calls the standalone function
@@ -305,7 +280,7 @@ RandomForest::RandomForest(const RandomForestConfig& config) :
 
 RandomForest::~RandomForest() {
     // Minimal destructor - let std::vector destructors handle cleanup automatically
-    // Explicit clearing can cause issues during Python GC, so we rely on RAII
+    // Explicit clearing can cause issues during Python GC, so RAII is used
     // The vectors will be destroyed in reverse order of declaration automatically
     
     // Just clear the progress callback to break any circular references
@@ -327,7 +302,7 @@ RandomForest::~RandomForest() {
                 static_cast<rf::cuda::LowRankProximityMatrix*>(lowrank_proximity_ptr_);
             delete lowrank_prox;
         } catch (const std::exception& e) {
-            // Log but don't rethrow - we're in a destructor
+            // Log but don't rethrow - called from destructor
             // In Jupyter, CUDA context might be corrupted, which is OK
         } catch (...) {
             // Ignore all other errors during cleanup - process might be shutting down
@@ -337,10 +312,10 @@ RandomForest::~RandomForest() {
         lowrank_proximity_ptr_ = nullptr;
     }
     
-    // CRITICAL: Do NOT explicitly clear vectors in destructor
+    // Do NOT explicitly clear vectors in destructor
     // This can cause double-free errors if Python still holds references
     // Let the vector destructors handle cleanup automatically
-    // Only clear if we're sure no references exist (which we can't guarantee)
+    // Only clear if no references exist (cannot be guaranteed)
     // The vectors will be automatically destroyed when the object is destroyed
     
     // Don't explicitly clear other vectors - let their destructors handle it
@@ -399,8 +374,6 @@ void RandomForest::initialize_arrays() {
 
     // Allocate feature importances if requested
     if (config_.compute_importance) {
-        // std::cout << "DEBUG: compute_importance is TRUE, allocating arrays" << std::endl;
-        // std::cout.flush();  // Commented out to avoid stream conflicts with Python progress bars
         integer_t mimp = config_.mdim;
         feature_importances_.resize(mimp, 0.0f);
         
@@ -413,8 +386,6 @@ void RandomForest::initialize_arrays() {
         }
         avimp_.resize(config_.mdim, 0.0f);
         sqsd_.resize(config_.mdim, 0.0f);
-    } else {
-        // std::cout << "DEBUG: compute_importance is FALSE" << std::endl;
     }
 }
 
@@ -467,19 +438,8 @@ void RandomForest::set_categorical_features(const integer_t* cat_array, integer_
 
 // Unified fit method that dispatches based on task type
 void RandomForest::fit(const real_t* X, const void* y, const real_t* sample_weight) {
-    // Debug prints removed to avoid potential stream corruption issues
-    // std::cout << "[FIT] RandomForest::fit() called - task_type=" << static_cast<int>(config_.task_type) 
-    //           << ", use_casewise=" << config_.use_casewise << std::endl;
-    // std::cout.flush();
-    
     // Set global config values that CPU/GPU code needs
     rf::g_config.use_casewise = config_.use_casewise;
-    // std::cout << "[FIT] Set g_config.use_casewise=" << rf::g_config.use_casewise << std::endl;
-    // std::cout.flush();
-    //     // std::cout << "DEBUG: RandomForest::fit ENTRY - nsample=" << config_.nsample 
-    //           << ", compute_proximity=" << config_.compute_proximity 
-    //           << ", use_qlora=" << config_.use_qlora << std::endl;
-    // std::cout.flush();
     
     switch (config_.task_type) {
         case TaskType::CLASSIFICATION:
@@ -496,24 +456,6 @@ void RandomForest::fit(const real_t* X, const void* y, const real_t* sample_weig
 
 // Classification training
 void RandomForest::fit_classification(const real_t* X, const integer_t* y, const real_t* sample_weight) {
-    // NOTE: Removed debug prints to avoid potential stack issues during return
-    
-    // Debug: Check y data
-    // std::cout << "C++ fit_classification: y data first " << std::min(10, (int)config_.nsample) << ": ";
-    // for (int i = 0; i < std::min(10, (int)config_.nsample); i++) {
-    //     std::cout << y[i] << " ";
-    // }
-    // std::cout << std::endl;
-    // if (config_.nsample > 50) {
-    //     std::cout << "C++ fit_classification: y data samples 50-59: ";
-    //     for (int i = 50; i < std::min(60, (int)config_.nsample); i++) {
-    //         std::cout << y[i] << " ";
-    //     }
-    //     std::cout << std::endl;
-    // }
-    
-    // std::cout << "DEBUG: fit_classification called, compute_importance=" << config_.compute_importance << std::endl;
-    
     // Training message handled by Python wrapper
     
     // Lazy CUDA initialization (only when actually needed)
@@ -521,21 +463,11 @@ void RandomForest::fit_classification(const real_t* X, const integer_t* y, const
     // User explicitly requested GPU via use_gpu=True
     if (config_.use_gpu) {
         try {
-            // std::cout << "DEBUG: Attempting CUDA initialization..." << std::endl;
-            // std::cout.flush();
             bool cuda_success = rf::cuda::cuda_init_runtime(false);
             config_.use_gpu = cuda_success;
-            // Commented out to avoid stream conflicts with Python progress bars
-            // if (config_.use_gpu) {
-            //     std::cout << "CUDA: Using GPU acceleration\n";
-            // } else {
-            //     std::cout << "CUDA: Initialization failed, falling back to CPU\n";
-            // }
         } catch (const std::exception& e) {
-            // std::cerr << "CUDA: Initialization failed (" << e.what() << "), using CPU fallback\n";  // Commented to avoid stream conflicts
             config_.use_gpu = false;
         } catch (...) {
-            // std::cerr << "CUDA: Initialization failed (unknown error), using CPU fallback\n";  // Commented to avoid stream conflicts
             config_.use_gpu = false;
         }
     } else {
@@ -543,109 +475,49 @@ void RandomForest::fit_classification(const real_t* X, const integer_t* y, const
         config_.use_gpu = false;
     }
     
-    // Print memory information (skip in CPU mode to reduce output)
-    // Only print for GPU mode or if explicitly requested
-    // if (config_.use_gpu) {
-    //     print_memory_info(config_.nsample, config_.mdim, config_.ntree, config_.nclass, config_.maxnode, config_.use_gpu);
-    // }
-
     // Store training data
-    // std::cout << "DEBUG: About to assign X_train_..." << std::endl;
-    // std::cout.flush();  // Commented out to avoid stream conflicts with Python progress bars
     X_train_.assign(X, X + config_.mdim * config_.nsample);
-    
-    // std::cout << "DEBUG: About to assign y_train_classification_..." << std::endl;
-    // std::cout.flush();
     y_train_classification_.assign(y, y + config_.nsample);
 
-    // std::cout << "DEBUG: About to resize sample_weight_..." << std::endl;
-    // std::cout.flush();
     if (sample_weight) {
         sample_weight_.assign(sample_weight, sample_weight + config_.nsample);
     } else {
         sample_weight_.resize(config_.nsample, 1.0f);
     }
 
-    // std::cout << "DEBUG: About to call setup_classification_task..." << std::endl;
-    // std::cout.flush();
     // Setup classification-specific parameters
     setup_classification_task(y);
     
-    // std::cout << "DEBUG: About to call prepare_data..." << std::endl;
-    // std::cout.flush();
     // Prepare data (sort, create ties)
     prepare_data();
     
-    // std::cout << "DEBUG: Completed prepare_data" << std::endl;
-    // std::cout.flush();
-    
-    // CRITICAL: Add barrier to ensure prepare_data() completed fully
-    // std::cout << "DEBUG: prepare_data() returned successfully" << std::endl;
-    // std::cout.flush();
-    
-    // CRITICAL: Check config values BEFORE accessing them in condition
-    // This ensures we're not accessing corrupted memory
-    // std::cout << "DEBUG: About to read config_.use_gpu..." << std::endl;
-    // std::cout.flush();
+    // Check config values BEFORE accessing them in condition
     bool use_gpu_val = config_.use_gpu;
-    // std::cout << "DEBUG: config_.use_gpu read successfully: " << use_gpu_val << std::endl;
-    // std::cout.flush();
-    
-    // std::cout << "DEBUG: About to read config_.ntree..." << std::endl;
-    // std::cout.flush();
     integer_t ntree_val = config_.ntree;
-    // std::cout << "DEBUG: config_.ntree read successfully: " << ntree_val << std::endl;
-    // std::cout.flush();
-
-    // std::cout << "DEBUG: Checking GPU batch mode - use_gpu=" << use_gpu_val 
-    //           << ", ntree=" << ntree_val << std::endl;
-    // std::cout.flush();
-    
-    // std::cout << "DEBUG: About to check if condition..." << std::endl;
-    // std::cout.flush();
     
     // CPU mode: Use sequential CPU for ANY number of trees when GPU is disabled
     // GPU mode: Always use GPU batch mode (auto-scaling)
     if (!use_gpu_val) {
         // CPU sequential mode: Use for ANY number of trees when GPU is disabled
-        // CRITICAL: Low-rank proximity is GPU-only! Disable it in CPU mode for large datasets
+        // Low-rank proximity is GPU-only! Disable it in CPU mode for large datasets
         if (config_.compute_proximity && config_.use_qlora) {
-            // std::cerr << "WARNING: Low-rank proximity (use_qlora=True) requires GPU, but GPU is not available." << std::endl;  // Commented to avoid stream conflicts
-            // std::cerr << "WARNING: Disabling proximity computation for CPU mode with use_qlora=True." << std::endl;  // Commented to avoid stream conflicts
-            // std::cerr << "WARNING: Use GPU mode (use_gpu=True) for low-rank proximity." << std::endl;  // Commented to avoid stream conflicts
             config_.compute_proximity = false;  // Disable proximity in CPU mode
             proximity_matrix_.clear();  // Clear any allocated proximity matrix
         }
         
-        // std::cout << "DEBUG: Using CPU sequential mode (classification) - ntree=" << ntree_val << std::endl;
-        // std::cout.flush();
-        // std::cout << "Growing trees:\n";
         for (integer_t itree = 0; itree < ntree_val; ++itree) {
-            // std::cout << "DEBUG: Loop iteration " << itree << " of " << ntree_val << std::endl;
-            // std::cout.flush();
-            // std::cout << "DEBUG: About to call grow_tree_single for tree " << itree << std::endl;
-            // std::cout.flush();
-            // CRITICAL: Cache config_.iseed to avoid accessing config_ member during crash
             integer_t seed_val = config_.iseed + itree;
-            // std::cout << "DEBUG: seed_val=" << seed_val << std::endl;
-            // std::cout.flush();
             grow_tree_single(itree, seed_val);
-            // std::cout << "DEBUG: Completed grow_tree_single for tree " << itree << std::endl;
-            // std::cout.flush();
 
             // Progress update for CPU training (callback)
             if (progress_callback_) {
                 progress_callback_(itree + 1, config_.ntree);
             }
         }
-        // std::cout << "\n";
     } else {
         // GPU mode: Choose between sequential (batch_size=1) or batch (batch_size>1)
         integer_t batch_size;
         bool is_auto_scaled = false;
-        
-        // std::cout << "[DEBUG CLASSIFICATION] config_.batch_size = " << config_.batch_size << std::endl;
-        std::cout.flush();
         
         // Determine batch size first
         if (config_.batch_size > 0) {
@@ -663,21 +535,15 @@ void RandomForest::fit_classification(const real_t* X, const integer_t* y, const
             is_auto_scaled = true;
         }
         
-        // CRITICAL: Set gpu_parallel_mode0 based on batch_size
+        // Set gpu_parallel_mode0 based on batch_size
         // Parallel mode is enabled when batch_size > 1
         // Fixed: Removed expensive curand_init from kernel, now uses pre-initialized states
         // This must be set BEFORE calling fit_batch_gpu
         rf::g_config.gpu_parallel_mode0 = (batch_size > 1);
         
-        if (is_auto_scaled){
-            // std::cout << "GPU: Auto-scaling selected batch size = " << batch_size << " trees (out of " << ntree_val << " total)" << std::endl;  // Commented for Jupyter safety
-        } else {
-            // std::cout << "GPU: Using manual batch size = " << batch_size << " trees (out of " << ntree_val << " total, config_.batch_size=" << config_.batch_size << ")" << std::endl;  // Commented for Jupyter safety
-        }
-        // std::cout.flush();  // Commented for Jupyter safety
         fit_batch_gpu(X, y, sample_weight_.data(), batch_size);
         
-        // CRITICAL: Validate object state after GPU operations to catch corruption
+        // Validate object state after GPU operations to catch corruption
         // Check that essential member variables are still valid
         if (config_.nsample <= 0 || config_.nclass <= 0) {
             throw std::runtime_error("Object state corrupted after fit_batch_gpu: invalid config");
@@ -695,29 +561,27 @@ void RandomForest::fit_classification(const real_t* X, const integer_t* y, const
     
     // Finalize training (normalizes OOB votes for probabilities, but we've already computed error/predictions)
     // Match repo version: call finalize_training AFTER compute_oob_predictions
-    // NOTE: fit_batch_gpu() should NOT call finalize_training() - we call it here instead
+    // NOTE: fit_batch_gpu() should NOT call finalize_training() - it is called here instead
     finalize_training();
 
-    // CRITICAL: After fit, finalize CUDA operations to ensure all kernels complete
+    // After fit, finalize CUDA operations to ensure all kernels complete
     // This prevents stale operations from affecting subsequent cells and ensures clean return
     // This matches the pattern in fit_regression() and fit_unsupervised()
-    // CRITICAL: Store use_gpu in local variable to avoid accessing config_ after GPU operations
+    // Store use_gpu in local variable to avoid accessing config_ after GPU operations
     bool use_gpu_local = config_.use_gpu;
     if (use_gpu_local) {
         rf::cuda::cuda_finalize_operations();
-        // CRITICAL: Clear any CUDA errors after finalization to ensure clean state
+        // Clear any CUDA errors after finalization to ensure clean state
         #ifdef CUDA_FOUND
         cudaGetLastError();  // Clear any pending errors
         #endif
     }
     
-    // CRITICAL: Add memory barrier before return to ensure all operations complete
+    // Add memory barrier before return to ensure all operations complete
     // This helps prevent stack corruption during return in exec() context
     std::atomic_thread_fence(std::memory_order_seq_cst);
     
-    // CRITICAL: Flush all output streams before return to ensure clean state
-    // std::cout.flush();  // Commented out to avoid stream conflicts with Python progress bars
-    // std::cerr.flush();  // Commented out to avoid stream conflicts with Python progress bars
+    // Flush all output streams before return to ensure clean state
 
     // OOB error handled by Python wrapper
     // Match repo version exactly - simple return, no debug prints
@@ -728,7 +592,7 @@ void RandomForest::fit_regression(const real_t* X, const real_t* y, const real_t
     // Training message handled by Python wrapper
     // std::cout << "Training Random Forest Regressor with " << config_.ntree << " trees...\n";
     
-    // CRITICAL: Clear any stale CUDA errors before fit (handles context between Jupyter cells)
+    // Clear any stale CUDA errors before fit (handles context between Jupyter cells)
     if (config_.use_gpu) {
         rf::cuda::cuda_clear_errors();
     }
@@ -760,16 +624,11 @@ void RandomForest::fit_regression(const real_t* X, const real_t* y, const real_t
         config_.use_gpu = false;
     }
     
-    // CRITICAL: Before fit, ensure CUDA context is ready (handles context between Jupyter cells)
+    // Before fit, ensure CUDA context is ready (handles context between Jupyter cells)
     if (config_.use_gpu) {
         rf::cuda::cuda_ensure_context_ready();
     }
     
-    // Print memory information (skip in CPU mode to reduce output)
-    // Only print for GPU mode or if explicitly requested
-    // if (config_.use_gpu) {
-    //     print_memory_info(config_.nsample, config_.mdim, config_.ntree, config_.nclass, config_.maxnode, config_.use_gpu);
-    // }
     integer_t ntree_val = config_.ntree;
     // Store training data
     X_train_.assign(X, X + config_.mdim * config_.nsample);
@@ -791,7 +650,7 @@ void RandomForest::fit_regression(const real_t* X, const real_t* y, const real_t
     // GPU mode: Always use GPU batch mode (auto-scaling)
     if (!config_.use_gpu) {
         // CPU sequential mode: Use for ANY number of trees when GPU is disabled
-        // CRITICAL: Low-rank proximity is GPU-only! Disable it in CPU mode for large datasets
+        // Low-rank proximity is GPU-only! Disable it in CPU mode for large datasets
         if (config_.compute_proximity && config_.use_qlora) {
             // std::cerr << "WARNING: Low-rank proximity (use_qlora=True) requires GPU, but GPU is not available." << std::endl;  // Commented to avoid stream conflicts
             // std::cerr << "WARNING: Disabling proximity computation for CPU mode with use_qlora=True." << std::endl;  // Commented to avoid stream conflicts
@@ -827,12 +686,12 @@ void RandomForest::fit_regression(const real_t* X, const real_t* y, const real_t
             is_auto_scaled = true;
         }
         
-        // CRITICAL: Set gpu_parallel_mode0 based on batch_size
+        // Set gpu_parallel_mode0 based on batch_size
         // Parallel mode is enabled when batch_size > 1
         // This must be set BEFORE calling fit_batch_gpu
         rf::g_config.gpu_parallel_mode0 = (batch_size > 1);
         
-        // CRITICAL: Set g_config.use_casewise BEFORE calling fit_batch_gpu
+        // Set g_config.use_casewise BEFORE calling fit_batch_gpu
         rf::g_config.use_casewise = config_.use_casewise;
         
         if (is_auto_scaled){
@@ -856,7 +715,7 @@ void RandomForest::fit_regression(const real_t* X, const real_t* y, const real_t
     // Compute regression MSE
     compute_regression_mse();
 
-    // CRITICAL: After fit, finalize CUDA operations to ensure all kernels complete
+    // After fit, finalize CUDA operations to ensure all kernels complete
     // This prevents stale operations from affecting subsequent cells
     if (config_.use_gpu) {
         rf::cuda::cuda_finalize_operations();
@@ -874,7 +733,7 @@ void RandomForest::fit_unsupervised(const real_t* X, const real_t* sample_weight
     // Training message handled by Python wrapper
     // std::cout << "Training Random Forest Unsupervised with " << config_.ntree << " trees...\n";
     
-    // CRITICAL: Clear any stale CUDA errors before fit (handles context between Jupyter cells)
+    // Clear any stale CUDA errors before fit (handles context between Jupyter cells)
     if (config_.use_gpu) {
         rf::cuda::cuda_clear_errors();
     }
@@ -906,7 +765,7 @@ void RandomForest::fit_unsupervised(const real_t* X, const real_t* sample_weight
         config_.use_gpu = false;
     }
     
-    // CRITICAL: Before fit, ensure CUDA context is ready (handles context between Jupyter cells)
+    // Before fit, ensure CUDA context is ready (handles context between Jupyter cells)
     if (config_.use_gpu) {
         rf::cuda::cuda_ensure_context_ready();
     }
@@ -949,7 +808,7 @@ void RandomForest::fit_unsupervised(const real_t* X, const real_t* sample_weight
     // GPU mode: Always use GPU batch mode (auto-scaling)
     if (!config_.use_gpu) {
         // CPU sequential mode: Use for ANY number of trees when GPU is disabled
-        // CRITICAL: Low-rank proximity is GPU-only! Disable it in CPU mode for large datasets
+        // Low-rank proximity is GPU-only! Disable it in CPU mode for large datasets
         if (config_.compute_proximity && config_.use_qlora) {
             // std::cerr << "WARNING: Low-rank proximity (use_qlora=True) requires GPU, but GPU is not available." << std::endl;  // Commented to avoid stream conflicts
             // std::cerr << "WARNING: Disabling proximity computation for CPU mode with use_qlora=True." << std::endl;  // Commented to avoid stream conflicts
@@ -993,12 +852,12 @@ void RandomForest::fit_unsupervised(const real_t* X, const real_t* sample_weight
             is_auto_scaled = true;
         }
         
-        // CRITICAL: Set gpu_parallel_mode0 based on batch_size
+        // Set gpu_parallel_mode0 based on batch_size
         // Parallel mode is enabled when batch_size > 1
         // This must be set BEFORE calling fit_batch_gpu
         rf::g_config.gpu_parallel_mode0 = (batch_size > 1);
         
-        // CRITICAL: Set g_config.use_casewise BEFORE calling fit_batch_gpu
+        // Set g_config.use_casewise BEFORE calling fit_batch_gpu
         rf::g_config.use_casewise = config_.use_casewise;
         
         if (is_auto_scaled){
@@ -1017,7 +876,7 @@ void RandomForest::fit_unsupervised(const real_t* X, const real_t* sample_weight
         // std::cout.flush();
     }
 
-    // CRITICAL: After fit, finalize CUDA operations to ensure all kernels complete
+    // After fit, finalize CUDA operations to ensure all kernels complete
     // This prevents stale operations from affecting subsequent cells
     if (config_.use_gpu) {
         rf::cuda::cuda_finalize_operations();
@@ -1029,29 +888,14 @@ void RandomForest::fit_unsupervised(const real_t* X, const real_t* sample_weight
 
 void RandomForest::prepare_data() {
     // Prepare data: sort and create ties array
-    // std::cout << "DEBUG: About to allocate isort and v arrays" << std::endl;
-    // std::cout.flush();
-    
     std::vector<integer_t> isort(config_.nsample);
     std::vector<real_t> v(config_.nsample);
     
-    // std::cout << "DEBUG: About to call prepdata" << std::endl;
-    // std::cout.flush();
-
     prepdata(X_train_.data(), config_.mdim, config_.nsample,
              cat_.data(), isort.data(), v.data(), asave_.data(), ties_.data());
-             
-    // std::cout << "DEBUG: Completed prepdata" << std::endl;
-    // std::cout.flush();
 }
 
 void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
-    // std::cout << "DEBUG: grow_tree_single ENTRY - tree_id=" << tree_id 
-    //           << ", seed=" << seed << ", nsample=" << config_.nsample << std::endl;
-    // std::cout.flush();
-    
-    // std::cerr << "DEBUG: grow_tree_single called for tree " << tree_id << " with seed " << seed << std::endl;
-    
     // Use pre-allocated workspace arrays to avoid repeated allocation/deallocation
     integer_t ninbag, noobag;
 
@@ -1096,11 +940,7 @@ void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
     std::fill(jtr_workspace_.begin(), jtr_workspace_.end(), 0);
     std::fill(nodextr_workspace_.begin(), nodextr_workspace_.end(), 0);
     // printf("DEBUG: Workspace arrays cleared\n");
-    // fflush(stdout);
-
     // Get pointers to this tree's storage
-    // printf("DEBUG: About to get pointers to tree storage\n");
-    // fflush(stdout);
     real_t* tnodewt = tnodewt_.data() + tree_id * config_.maxnode;
     real_t* xbestsplit = xbestsplit_.data() + tree_id * config_.maxnode;
     integer_t* nodestatus = nodestatus_.data() + tree_id * config_.maxnode;
@@ -1118,23 +958,12 @@ void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
     std::fill(catgoleft, catgoleft + config_.maxcat * config_.maxnode, 0);
     std::fill(tnodewt, tnodewt + config_.maxnode, 0.0f);  // Initialize tnodewt for this tree
 
-    // printf("DEBUG: Tree arrays initialized\n");
-    // fflush(stdout);
-
     // Grow tree
-    // printf("DEBUG: About to check task_type\n");
-    // fflush(stdout);
     const integer_t* y_data;
     if (config_.task_type == TaskType::CLASSIFICATION) {
-        //         // printf("DEBUG: Task type is CLASSIFICATION\n");
-        // fflush(stdout);
         // Use 0-based class labels directly (matching reference setup_classification_task)
         // Note: cpu_growtree expects 0-based labels (checks class_idx >= 0 && class_idx < nclass)
-        //         // printf("DEBUG: Using y_train_classification_1based_ (0-based labels)\n");
-        // fflush(stdout);
         y_data = y_train_classification_1based_.data();
-        //         // printf("DEBUG: y_data set to y_train_classification_1based_.data()\n");
-        // fflush(stdout);
     } else if (config_.task_type == TaskType::REGRESSION) {
         // For regression, we need to convert real_t to integer_t
         // Scale y values to preserve precision (small values like 0.1 become 100)
@@ -1154,9 +983,6 @@ void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
         }
         y_data = y_train_unsupervised_.data();
     }
-    
-    // printf("DEBUG: About to call cpu_growtree_wrapper\n");
-    // fflush(stdout);
     
     // Use the standard tree growing function for all task types
     // The implementation in rf_growtree.cpp now handles regression, classification, and unsupervised
@@ -1181,15 +1007,15 @@ void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
     // Call testreebag to get OOB predictions and terminal nodes for this tree
     // NOTE: cpu_testreebag traverses the tree for OOB samples and:
     //   - For classification: populates jtr with class predictions, nodextr with terminal nodes
-    //   - For regression: we still need nodextr (terminal nodes) to get predictions from tnodewt[nodextr[n]]
-    //                     jtr is not used for regression (we use tnodewt[nodextr[n]] directly)
+    //   - For regression: nodextr (terminal nodes) is still needed to get predictions from tnodewt[nodextr[n]]
+    //                     jtr is not used for regression (tnodewt[nodextr[n]] is used directly)
     //   - For unsupervised: same as classification (uses class predictions)
     cpu_testreebag(X_train_.data(), xbestsplit, nin_workspace_.data(), treemap, bestvar,
                nodeclass, cat_.data(), nodestatus, catgoleft,
                config_.nsample, config_.mdim, nnode_[tree_id], config_.maxcat,
                jtr_workspace_.data(), nodextr_workspace_.data());
     
-    // CRITICAL: Compute tnodewt for classification casewise mode
+    // Compute tnodewt for classification casewise mode
     // For classification with casewise=True, tnodewt[node] = mean bootstrap weight of in-bag samples in that node
     // For classification with casewise=False, we don't use tnodewt (always weight=1.0)
     // For regression, tnodewt is already computed during tree growing (mean y value in node)
@@ -1243,8 +1069,8 @@ void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
     }
     
     // For regression, jtr_workspace_ contains class predictions (not meaningful for regression)
-    // We use tnodewt[nodextr_workspace_[n]] for regression predictions instead
-    // But we still need nodextr_workspace_ to know which terminal node each OOB sample reached
+    // tnodewt[nodextr_workspace_[n]] is used for regression predictions instead
+    // nodextr_workspace_ is still needed to know which terminal node each OOB sample reached
 
 
     // Accumulate OOB votes/predictions
@@ -1259,7 +1085,7 @@ void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
             if (jtr_workspace_[n] >= 0 && jtr_workspace_[n] < config_.nclass) {
                 // Use 0-based indexing directly
                 // q_ array is indexed as [sample * nclass + class]
-                // CRITICAL: Casewise vs non-casewise weighting for OOB votes
+                // Casewise vs non-casewise weighting for OOB votes
                 // Non-casewise: weight = 1.0 (UC Berkeley standard)
                 // Casewise: weight = tnodewt[terminal_node] (bootstrap frequency weighted)
                 real_t vote_weight = 1.0f;
@@ -1399,7 +1225,7 @@ void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
         }
         
         // Compute terminal nodes for in-bag samples
-        // We need to run samples through the tree to get their terminal nodes
+        // Samples must be run through the tree to get their terminal nodes
         for (integer_t n = 0; n < config_.nsample; ++n) {
             if (nin_workspace_[n] > 0) {
                 // In-bag sample - compute terminal node
@@ -1413,28 +1239,28 @@ void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
     
     // Proximity computation if requested (standard proximity, not RF-GAP)
     // NOTE: proximity_matrix_ should be initialized ONCE before all trees, not per tree
-    // This function is called per tree, so we should NOT resize/reset here
+    // This function is called per tree, so resize/reset should NOT occur here
     // Only allocate if empty (first tree), otherwise accumulate across trees
     if (config_.compute_proximity && !config_.use_rfgap) {
-        // CRITICAL: Only initialize on first tree (when empty), then accumulate across trees
+        // Only initialize on first tree (when empty), then accumulate across trees
         if (proximity_matrix_.empty()) {
             proximity_matrix_.resize(static_cast<size_t>(config_.nsample) * config_.nsample, 0.0);
             proximity_matrix_.reserve(static_cast<size_t>(config_.nsample) * config_.nsample);
         }
-        // If not empty, proximity_matrix_ already exists and we'll accumulate into it
+        // If not empty, proximity_matrix_ already exists and accumulation occurs into it
         
         std::vector<integer_t> nod(config_.maxnode);  // nod(nnode) in Fortran
         std::vector<integer_t> ncount(config_.nsample);  // ncount(nsample) in Fortran
         std::vector<integer_t> ncn(config_.nsample);  // ncn(nsample) in Fortran
         std::vector<integer_t> nodexb(config_.nsample);  // nodexb(nsample) in Fortran
-        // CRITICAL: Allocate ndbegin with size maxnode+1 to prevent out-of-bounds access
-        // The proximity code accesses ndbegin[k+1], so we need at least maxnode+1 elements
-        // But we'll use nterm+1 where nterm <= maxnode, so maxnode+1 is safe
+        // Allocate ndbegin with size maxnode+1 to prevent out-of-bounds access
+        // The proximity code accesses ndbegin[k+1], so at least maxnode+1 elements are required
+        // nterm+1 is used where nterm <= maxnode, so maxnode+1 is safe
         std::vector<integer_t> ndbegin(config_.maxnode + 1);  // ndbegin(nterm+1) in Fortran - FIXED!
         std::vector<integer_t> npcase(config_.nsample);  // npcase(nsample) in Fortran - FIXED!
 
-        // CRITICAL: cpu_testreebag only sets nodextr_workspace_ for OOB samples
-        // For standard proximity, we need terminal nodes for ALL samples (both OOB and in-bag)
+        // cpu_testreebag only sets nodextr_workspace_ for OOB samples
+        // For standard proximity, terminal nodes are needed for ALL samples (both OOB and in-bag)
         // Compute terminal nodes for in-bag samples
         for (integer_t n = 0; n < config_.nsample; ++n) {
             if (nin_workspace_[n] > 0) {
@@ -1455,7 +1281,7 @@ void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
 
 void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
                                    const real_t* sample_weight, integer_t batch_size) {
-    // CRITICAL: Before fit_batch_gpu, ensure CUDA context is ready (handles context between Jupyter cells)
+    // Before fit_batch_gpu, ensure CUDA context is ready (handles context between Jupyter cells)
     // This is especially important for GPU sequential mode (batch_size=1)
     if (config_.use_gpu) {
         rf::cuda::cuda_ensure_context_ready();
@@ -1488,7 +1314,7 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
     
     // std::cout << "Using GPU batch mode with batch size: " << batch_size << "\n";
     
-    // CRITICAL: Initialize variable importance array ONCE at the start of fit_batch_gpu
+    // Initialize variable importance array ONCE at the start of fit_batch_gpu
     // Do NOT reset it between batches - it needs to accumulate across all batches
     // This initialization happens once per call to fit_batch_gpu (which is called once per fit)
     if (config_.compute_importance) {
@@ -1519,7 +1345,7 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
         // std::cout << "  Processing trees " << batch_start << "-" << (batch_end - 1) << "...\n";
         
         // Resize workspace arrays for batch processing
-        // CRITICAL: For batch processing, we DON'T resize the main tree arrays (nodestatus_, bestvar_, etc.)
+        // For batch processing, we DON'T resize the main tree arrays (nodestatus_, bestvar_, etc.)
         // because they need to persist across batches. Only resize per-sample workspace arrays.
         amat_workspace_.resize(num_trees_batch * config_.mdim * config_.nsample);
         jinbag_workspace_.resize(num_trees_batch * config_.nsample);
@@ -1571,7 +1397,7 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
             // This enables low-rank factors for all datasets when using GPU
             // NOTE: Low-rank mode is GPU-only (requires CUDA kernels, cuBLAS, cuSolver)
             // CPU mode will never use low-rank - it always computes full proximity matrix
-            // Check if we're actually using GPU (use_gpu flag)
+            // Check if GPU is actually being used (use_gpu flag)
             bool actually_using_gpu = config_.use_gpu;
             if (actually_using_gpu && config_.use_qlora) {
                 use_lowrank = true;  // Force low-rank for all GPU datasets
@@ -1582,34 +1408,20 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
                 use_upper_triangle = true;  // Default to true for memory efficiency
             }
             
-            // std::cout << "DEBUG: fit_batch_gpu - use_lowrank=" << use_lowrank 
-            //           << ", use_upper_triangle=" << use_upper_triangle << std::endl;
-            // std::cout.flush();
-            
             if (use_lowrank && use_upper_triangle) {
                 // For low-rank mode, DO NOT allocate full matrix - keep in low-rank form!
                 // This saves ~80GB of memory. Reconstruction can be done on-demand if needed.
                 proximity_ptr = nullptr;  // Pass nullptr to indicate low-rank mode
-                // std::cout << "DEBUG: fit_batch_gpu - Set proximity_ptr to nullptr for low-rank mode" << std::endl;
-                // std::cout.flush();
             } else {
                 // Traditional mode: allocate full matrix (for smaller datasets)
                 if (proximity_matrix_.empty()) {
-                    // std::cout << "DEBUG: fit_batch_gpu - Allocating proximity_matrix_ (nsample=" 
-                    //           << config_.nsample << ")" << std::endl;
-                    // std::cout.flush();
                     proximity_matrix_.resize(static_cast<size_t>(config_.nsample) * config_.nsample, 0.0);
-                    // std::cout << "DEBUG: fit_batch_gpu - Allocated proximity_matrix_ size=" 
-                    //           << proximity_matrix_.size() << std::endl;
-                    // std::cout.flush();
                 }
                 proximity_ptr = proximity_matrix_.data();
-                // std::cout << "DEBUG: fit_batch_gpu - Set proximity_ptr to proximity_matrix_.data()" << std::endl;
-                // std::cout.flush();
             }
         } else if (config_.compute_proximity && config_.use_rfgap) {
             // RF-GAP mode: don't compute standard proximity during GPU batching
-            // We'll compute RF-GAP proximity after all batches complete
+            // RF-GAP proximity is computed after all batches complete
             proximity_ptr = nullptr;
             use_lowrank = false;
             use_upper_triangle = false;
@@ -1620,12 +1432,12 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
         
         // Copy config values to global config for GPU code BEFORE calling gpu_growtree_batch
         // Set global config values that GPU code needs (before first batch)
-        // CRITICAL: Always set use_casewise, not just on first batch
+        // Always set use_casewise, not just on first batch
         // This ensures proximity kernels have the correct flag
         rf::g_config.use_casewise = config_.use_casewise;
         
         if (batch_start == 0) {
-            // CRITICAL: compute_proximity overrides use_qlora - if proximity is disabled, disable qlora too
+            // compute_proximity overrides use_qlora - if proximity is disabled, disable qlora too
             // This prevents low-rank proximity initialization when proximity is not requested
             rf::g_config.use_qlora = config_.compute_proximity ? config_.use_qlora : false;
             rf::g_config.quant_mode = config_.quant_mode;
@@ -1635,27 +1447,14 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
             rf::g_config.lowrank_rank = config_.lowrank_rank;
             // Set impn flag for GPU importance computation (1 = compute local importance, 0 = skip)
             rf::g_config.impn = config_.compute_local_importance ? 1 : 0;
-            // std::cerr << "[FIT_BATCH] Set g_config - use_casewise=" << rf::g_config.use_casewise 
-            //           << ", use_qlora=" << rf::g_config.use_qlora 
-            //           << ", iprox=" << rf::g_config.iprox << std::endl;  // Commented to avoid stream conflicts with Python progress bars
-            // std::cerr.flush();
         } else {
             // Ensure use_casewise is set for subsequent batches too
             rf::g_config.use_casewise = config_.use_casewise;
         }
-        
-        // std::cout << "DEBUG: About to call gpu_growtree_batch - proximity_ptr=" 
-        //           << (proximity_ptr != nullptr ? "non-null" : "null") << std::endl;
-        // std::cout.flush();
-        
-        // std::cout << "[FIT_BATCH] About to call gpu_growtree_batch:" << std::endl;
-        // std::cout << "  proximity_ptr=" << (proximity_ptr != nullptr ? "non-null" : "null") << std::endl;
-        // std::cout << "  avimp=" << (config_.compute_importance ? "enabled" : "disabled") << std::endl;
-        // std::cout << "  use_lowrank=" << use_lowrank << ", use_upper_triangle=" << use_upper_triangle << std::endl;
         // std::cout << "  lowrank_ptr=" << ((use_lowrank && use_upper_triangle) ? "will-pass" : "nullptr") << std::endl;
         // std::cout.flush();
         
-        // CRITICAL: For low-rank mode (use_qlora=True), we MUST use low-rank mode (no temp buffer)
+        // For low-rank mode (use_qlora=True), we MUST use low-rank mode (no temp buffer)
         // If proximity_ptr is not nullptr and use_qlora is enabled, this would trigger temp buffer allocation in GPU code
         if (proximity_ptr != nullptr && config_.use_qlora) {
             // std::cerr << "ERROR: proximity_ptr is non-null for low-rank mode (use_qlora=True). This would trigger huge temp buffer allocation. Forcing nullptr." << std::endl;  // Commented to avoid stream conflicts
@@ -1671,7 +1470,7 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
             config_.minndsize, config_.mtry, config_.nsample, config_.maxcat,
             batch_seeds.data(), config_.ncsplit, config_.ncmax,
             amat_workspace_.data(), jinbag_workspace_.data(), 
-            // CRITICAL: Pass offset pointers for persistent arrays (they contain ALL trees)
+            // Pass offset pointers for persistent arrays (they contain ALL trees)
             tnodewt_.data() + batch_start * config_.maxnode,
             xbestsplit_.data() + batch_start * config_.maxnode,
             nodestatus_.data() + batch_start * config_.maxnode,
@@ -1741,7 +1540,7 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
     
     // After all batches complete, compute terminal nodes for in-bag samples (for RF-GAP)
     // This is done in parallel on CPU and doesn't slow down GPU batching
-    // CRITICAL: Store config values in local variables to avoid accessing potentially corrupted config_
+    // Store config values in local variables to avoid accessing potentially corrupted config_
     bool compute_proximity_local = config_.compute_proximity;
     bool use_rfgap_local = config_.use_rfgap;
     
@@ -1778,11 +1577,11 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
     }
     
     // Ensure all CUDA operations complete before accessing results
-    // CRITICAL: For Jupyter compatibility, skip explicit CUDA sync here
+    // For Jupyter compatibility, skip explicit CUDA sync here
     // The GPU code already synchronizes before returning from each batch
     // Additional sync can cause crashes if CUDA context is in an invalid state
     // This matches the pattern from commit 6a9a52f which avoids aggressive syncs
-    // CRITICAL: Store use_gpu in local variable before accessing to avoid potential corruption
+    // Store use_gpu in local variable before accessing to avoid potential corruption
     bool use_gpu_local = config_.use_gpu;
     if (use_gpu_local) {
         // Just clear any pending CUDA errors - don't sync (GPU code already synced)
@@ -1792,7 +1591,7 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
         #endif
     }
     
-    // CRITICAL: Add memory barrier before return to ensure all writes are visible
+    // Add memory barrier before return to ensure all writes are visible
     // This helps prevent issues with stack corruption or invalid memory access during return
     std::atomic_thread_fence(std::memory_order_seq_cst);
     
@@ -1816,7 +1615,7 @@ void RandomForest::finalize_training() {
 
     // Compute OOB predictions and error based on task type
     // Note: OOB error is computed in compute_classification_error() which is called
-    // in fit_classification() after finalize_training(). We don't need to recompute here.
+    // in fit_classification() after finalize_training(). No recomputation needed here.
     // The oob_error_ is already set by compute_classification_error().
     if (config_.task_type == TaskType::CLASSIFICATION) {
         // OOB error already computed in compute_classification_error() - nothing to do here
@@ -1949,7 +1748,7 @@ void RandomForest::finalize_training() {
                                         ", tree_nodextr_rfgap_.size()=" + std::to_string(tree_nodextr_rfgap_.size()));
             }
             
-            // CRITICAL: Ensure vectors are stable before passing to cpu_proximity_rfgap
+            // Ensure vectors are stable before passing to cpu_proximity_rfgap
             // Reserve capacity to prevent reallocation during function call
             // This prevents memory corruption if vectors are moved
             tree_nin_rfgap_.reserve(config_.ntree);
@@ -2039,7 +1838,7 @@ void RandomForest::setup_classification_task(const integer_t* y) {
 }
 
 void RandomForest::setup_regression_task(const real_t* y) {
-    // For regression, we use a single "class" but predict continuous values
+    // For regression, a single "class" is used but continuous values are predicted
     config_.nclass = 1;
     
     // Use regression-specific mtry
@@ -2051,7 +1850,7 @@ void RandomForest::setup_regression_task(const real_t* y) {
 }
 
 void RandomForest::setup_unsupervised_task() {
-    // For unsupervised, we use proximity-based clustering
+    // For unsupervised, proximity-based clustering is used
     // Use nclass=2 (binary classification style) instead of nclass=1 to avoid issues
     // with tree growing code that expects nclass >= 2 for classification-style splits
     // The synthetic labels are all zeros, which will be treated as class 0
@@ -2092,12 +1891,12 @@ void RandomForest::predict(const real_t* X, integer_t nsamples, void* prediction
 
 // Classification prediction - Use OOB for training data, tree traversal for new data
 void RandomForest::predict_classification(const real_t* X, integer_t nsamples, integer_t* predictions) {
-    // CRITICAL: Before predict, ensure CUDA context is ready (handles context between Jupyter cells)
+    // Before predict, ensure CUDA context is ready (handles context between Jupyter cells)
     if (config_.use_gpu) {
         rf::cuda::cuda_ensure_context_ready();
     }
     
-    // Check if we're predicting on training data (same size and potentially same data)
+    // Check if predicting on training data (same size and potentially same data)
     bool is_training_data = (nsamples == config_.nsample);
     
     if (is_training_data) {
@@ -2206,7 +2005,7 @@ void RandomForest::predict_classification(const real_t* X, integer_t nsamples, i
 
 // Regression prediction
 void RandomForest::predict_regression(const real_t* X, integer_t nsamples, real_t* predictions) {
-    // CRITICAL: Before predict, ensure CUDA context is ready (handles context between Jupyter cells)
+    // Before predict, ensure CUDA context is ready (handles context between Jupyter cells)
     if (config_.use_gpu) {
         rf::cuda::cuda_ensure_context_ready();
     }
@@ -2294,7 +2093,7 @@ void RandomForest::predict_regression(const real_t* X, integer_t nsamples, real_
 
 // Unsupervised prediction (clustering)
 void RandomForest::predict_unsupervised(const real_t* X, integer_t nsamples, integer_t* cluster_labels) {
-    // CRITICAL: Before predict, ensure CUDA context is ready (handles context between Jupyter cells)
+    // Before predict, ensure CUDA context is ready (handles context between Jupyter cells)
     if (config_.use_gpu) {
         rf::cuda::cuda_ensure_context_ready();
     }
@@ -2470,12 +2269,12 @@ void RandomForest::compute_oob_predictions() {
 }
 
 void RandomForest::predict_proba(const real_t* X, integer_t nsamples, real_t* probabilities) {
-    // CRITICAL: Before predict, ensure CUDA context is ready (handles context between Jupyter cells)
+    // Before predict, ensure CUDA context is ready (handles context between Jupyter cells)
     if (config_.use_gpu) {
         rf::cuda::cuda_ensure_context_ready();
     }
     
-    // Check if we're predicting on training data (same size and potentially same data)
+    // Check if predicting on training data (same size and potentially same data)
     bool is_training_data = (nsamples == config_.nsample);
     
     if (is_training_data) {
@@ -2584,7 +2383,7 @@ void RandomForest::compute_classification_error() {
     // This must be called BEFORE finalize_training() which normalizes q_
     // Use the same logic as compute_oob_predictions() to ensure consistency
     
-    // CRITICAL: Validate object state before accessing member variables
+    // Validate object state before accessing member variables
     if (config_.nsample <= 0 || config_.nclass <= 0) {
         throw std::runtime_error("Invalid config in compute_classification_error");
     }
@@ -2633,7 +2432,7 @@ void RandomForest::compute_classification_error() {
 void RandomForest::compute_regression_mse() {
     // Compute OOB MSE for regression
     // oob_predictions_ contains the SUM of predictions across all trees
-    // We need to divide by nout_[i] (number of trees that had this sample OOB) to get the average
+    // Division by nout_[i] (number of trees that had this sample OOB) is required to get the average
     real_t sum_squared_error = 0.0f;
     integer_t total_oob = 0;
     
@@ -2744,7 +2543,7 @@ void RandomForest::initialize_workspace_arrays() {
 
 // Synchronized getters for GPU memory safety
 const dp_t* RandomForest::get_proximity_matrix() const {
-    // CRITICAL: Before get_proximity, ensure CUDA context is ready (handles context between Jupyter cells)
+    // Before get_proximity, ensure CUDA context is ready (handles context between Jupyter cells)
     if (config_.use_gpu) {
         rf::cuda::cuda_ensure_context_ready();
     }
@@ -2773,7 +2572,7 @@ const dp_t* RandomForest::get_proximity_matrix() const {
         return nullptr;
     }
     
-    // CRITICAL: Ensure the vector's data pointer is valid
+    // Ensure the vector's data pointer is valid
     // Check if the vector's capacity is sufficient (prevents issues if vector was moved)
     if (proximity_matrix_.capacity() < expected_size) {
         // std::cerr << "WARNING: proximity_matrix_ capacity insufficient. Expected at least "  // Commented to avoid stream conflicts 
@@ -2781,7 +2580,7 @@ const dp_t* RandomForest::get_proximity_matrix() const {
         return nullptr;
     }
     
-    // CRITICAL: Verify the data pointer is actually valid
+    // Verify the data pointer is actually valid
     // Try to access the first element to ensure the memory is valid
     // This helps catch cases where the vector was moved or the memory was freed
     try {
@@ -2794,7 +2593,7 @@ const dp_t* RandomForest::get_proximity_matrix() const {
     
     // Return pointer - vector should remain stable as long as model exists
     // The Python binding will copy the data immediately, so this is safe
-    // However, we must ensure the vector is not moved or cleared while Python holds the pointer
+    // However, the vector must not be moved or cleared while Python holds the pointer
     return proximity_matrix_.data();
 }
 
@@ -2817,7 +2616,7 @@ const real_t* RandomForest::get_sqsd() const {
 }
 
 bool RandomForest::get_lowrank_factors(dp_t** A_host, dp_t** B_host, integer_t* r) const {
-    // CRITICAL: Before get_lowrank_factors, ensure CUDA context is ready (handles context between Jupyter cells)
+    // Before get_lowrank_factors, ensure CUDA context is ready (handles context between Jupyter cells)
     if (config_.use_gpu) {
         rf::cuda::cuda_ensure_context_ready();
     }
@@ -2832,7 +2631,7 @@ bool RandomForest::get_lowrank_factors(dp_t** A_host, dp_t** B_host, integer_t* 
         // Use helper function from CUDA file to avoid CUDA header inclusion in CPU compilation
         bool result = rf::cuda::get_lowrank_factors_host(lowrank_proximity_ptr_, A_host, B_host, r, get_n_samples());
         
-        // CRITICAL: After GPU operation, finalize to ensure all kernels complete
+        // After GPU operation, finalize to ensure all kernels complete
         if (config_.use_gpu && result) {
             rf::cuda::cuda_finalize_operations();
         }
@@ -2848,7 +2647,7 @@ bool RandomForest::get_lowrank_factors(dp_t** A_host, dp_t** B_host, integer_t* 
 }
 
 std::vector<double> RandomForest::compute_mds_from_factors(rf::integer_t k) const {
-    // CRITICAL: Before compute_mds, ensure CUDA context is ready (handles context between Jupyter cells)
+    // Before compute_mds, ensure CUDA context is ready (handles context between Jupyter cells)
     if (config_.use_gpu) {
         rf::cuda::cuda_ensure_context_ready();
     }
@@ -2863,7 +2662,7 @@ std::vector<double> RandomForest::compute_mds_from_factors(rf::integer_t k) cons
         // Use helper function from CUDA file to avoid CUDA header inclusion in CPU compilation
         std::vector<double> result = rf::cuda::compute_mds_from_factors_host(lowrank_proximity_ptr_, k);
         
-        // CRITICAL: After GPU operation, finalize to ensure all kernels complete
+        // After GPU operation, finalize to ensure all kernels complete
         if (config_.use_gpu && !result.empty()) {
             rf::cuda::cuda_finalize_operations();
         }

@@ -57,7 +57,7 @@ public:
         size_t element_size = sizeof(T);
         
         // get_available_memory() already applies 20% safety margin
-        // so we can use the full available amount here
+        // so the full available amount can be used here
         return available / element_size;
     }
     

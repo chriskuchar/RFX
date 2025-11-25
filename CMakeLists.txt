@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.18)
 project(RFX LANGUAGES CXX CUDA)
 
+# Set CMake policies to suppress warnings
+if(POLICY CMP0148)
+    cmake_policy(SET CMP0148 NEW)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)

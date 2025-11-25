@@ -551,18 +551,12 @@ __global__ void cuda_proximity_rfgap_kernel(
     
     // Shared memory for temporary storage (per block)
     __shared__ rf::integer_t shared_trees_oob[256];  // Max 256 trees per block
-    __shared__ rf::integer_t shared_count;
     
     // Initialize proximity row for sample i
     for (int j = 0; j < nsample; ++j) {
         prox[i * nsample + j] = 0.0;
     }
     
-    // Find trees where sample i is OOB (Si)
-    // Use shared memory to store tree indices (coalesced access)
-    if (threadIdx.x == 0) {
-        shared_count = 0;
-    }
     __syncthreads();
     
     // Count trees where i is OOB

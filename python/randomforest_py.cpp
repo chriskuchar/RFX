@@ -23,12 +23,12 @@
 namespace py = pybind11;
 
 // Standalone wrapper function for fit to avoid lambda capture issues in exec() context
-// CRITICAL: This function must return cleanly to avoid memcpy crashes in exec() context
+// This function must return cleanly to avoid memcpy crashes in exec() context
 void fit_wrapper(rf::RandomForest& self,
                  py::array_t<rf::real_t> X,
                  py::array y,
                  py::array_t<rf::real_t> sample_weight) {
-    // CRITICAL: Wrap entire function in try-catch to ensure clean return
+    // Wrap entire function in try-catch to ensure clean return
     // This prevents any exceptions from causing stack corruption during return
     try {
     // Check dimensions
@@ -105,7 +105,7 @@ void fit_wrapper(rf::RandomForest& self,
     
     if (config_nsample != actual_nsample || config_mdim != actual_mdim) {
         throw std::runtime_error(
-            "CRITICAL BUFFER OVERRUN PREVENTION:\n"
+            "BUFFER OVERRUN PREVENTION:\n"
             "Config dimensions don't match data dimensions!\n"
             "This would cause a buffer overrun crash in C++ code.\n\n"
             "Config: nsample=" + std::to_string(config_nsample) + ", mdim=" + std::to_string(config_mdim) + 
@@ -169,8 +169,8 @@ void fit_wrapper(rf::RandomForest& self,
     // Dispatch based on task type
     switch (self.get_task_type()) {
         case rf::TaskType::CLASSIFICATION: {
-            // For classification, we need to ensure y is integer type
-            // CRITICAL: Use heap allocation to avoid stack overflow in exec() context
+            // For classification, y must be integer type
+            // Use heap allocation to avoid stack overflow in exec() context
             std::unique_ptr<rf::integer_t[]> y_int(new rf::integer_t[y_buf.size]);
             
             // Handle different input formats
@@ -206,10 +206,10 @@ void fit_wrapper(rf::RandomForest& self,
                 throw std::runtime_error("Unsupported y data format: " + y_buf.format);
             }
             
-            // CRITICAL: Call fit_classification and then explicitly clear y_int before return
+            // Call fit_classification and then explicitly clear y_int before return
             self.fit_classification(X_ptr, y_int.get(), weight_ptr);
             
-            // CRITICAL: Explicitly clear the heap-allocated array before return
+            // Explicitly clear the heap-allocated array before return
             // This ensures clean memory state before returning to Python
             y_int.reset();
             break;
@@ -222,7 +222,7 @@ void fit_wrapper(rf::RandomForest& self,
             break;
     }
     
-    // CRITICAL: Ensure all local variables are cleared before return
+    // Ensure all local variables are cleared before return
     // This helps prevent stack corruption during return in exec() context
     // Explicitly clear any large local variables
     } catch (const std::exception& e) {
@@ -233,11 +233,11 @@ void fit_wrapper(rf::RandomForest& self,
         throw py::value_error("fit failed: unknown error");
     }
     
-    // CRITICAL: Flush all output streams before return to ensure clean state
+    // Flush all output streams before return to ensure clean state
     fflush(stdout);
     fflush(stderr);
     
-    // CRITICAL: Add explicit return to ensure clean stack unwinding
+    // Add explicit return to ensure clean stack unwinding
     // This helps prevent memcpy crashes during return in exec() context
     return;
 }
@@ -366,7 +366,7 @@ PYBIND11_MODULE(RFX, m) {
                             // Initialize CUDA config to check memory
                             rf::cuda::CudaConfig::instance().initialize();
                             
-                            // Check if we should stop instead of falling back to CPU
+                            // Check if execution should stop instead of falling back to CPU
                             if (rf::cuda::should_stop_on_insufficient_memory(config_.nsample, config_.mdim, config_.ntree)) {
                                 throw std::runtime_error(
                                     "MEMORY SAFETY: Insufficient GPU memory for this problem size.\n"
@@ -693,7 +693,7 @@ PYBIND11_MODULE(RFX, m) {
         }
         
         // Destructor - safely clean up raw pointer and progress bar
-        // CRITICAL: This must be exception-safe for Jupyter notebooks
+        // This must be exception-safe for Jupyter notebooks
         ~RandomForestClassifier() {
             // Wrap entire destructor in try-catch to prevent any exceptions from propagating
             // In Jupyter, exceptions in destructors can cause kernel crashes
@@ -1074,7 +1074,7 @@ PYBIND11_MODULE(RFX, m) {
             rf::integer_t mdim = rf_->get_n_features();
             py::array_t<rf::real_t> importances(mdim);
             const rf::real_t* imp_ptr = rf_->get_feature_importances();
-            // CRITICAL: Check if pointer is valid before copying
+            // Check if pointer is valid before copying
             // If compute_importance=False, feature_importances_ may be empty
             if (imp_ptr != nullptr) {
                 std::copy(imp_ptr, imp_ptr + mdim, importances.mutable_data());
@@ -1120,7 +1120,7 @@ PYBIND11_MODULE(RFX, m) {
             auto buf = result.request();
             
             if (proximity_ptr) {
-                // CRITICAL WARNING: If proximity_ptr was reconstructed from low-rank factors,
+                // WARNING: If proximity_ptr was reconstructed from low-rank factors,
                 // this required O(n²) memory and may have crashed the system for large datasets!
                 // Check if low-rank mode was active (use_qlora=True) - reconstruction is expensive
                 if (rf_->get_compute_proximity()) {
@@ -1132,7 +1132,7 @@ PYBIND11_MODULE(RFX, m) {
                 }
                 
                 // Convert from dp_t to real_t
-                // CRITICAL: Copy data immediately while holding reference to model
+                // Copy data immediately while holding reference to model
                 // This ensures the proximity matrix vector is not moved or cleared during copy
                 // Use element-by-element copy with bounds checking to avoid memory corruption
                 rf::real_t* dest = static_cast<rf::real_t*>(buf.ptr);
@@ -1234,7 +1234,7 @@ PYBIND11_MODULE(RFX, m) {
             // Call C++ CPU MDS implementation (uses LAPACK)
             // Pass OOB counts for RF-GAP normalization only if RF-GAP is actually enabled
             // Note: If RF-GAP was computed as full matrix, it's already normalized by |Si| in cpu_proximity_rfgap
-            // But if proximity matrix was reconstructed from low-rank factors (QLoRA), we need to normalize here
+            // But if proximity matrix was reconstructed from low-rank factors (QLoRA), normalization is required here
             // Get OOB counts for RF-GAP normalization if available
             const rf::integer_t* oob_counts = rf_->get_nout_ptr();
             // Only normalize by OOB counts if RF-GAP is actually enabled
@@ -1283,11 +1283,30 @@ PYBIND11_MODULE(RFX, m) {
             py::ssize_t n_duplicates = nsamples - n_unique;
             if (n_duplicates > 0) {
                 double pct_duplicates = (static_cast<double>(n_duplicates) / nsamples) * 100.0;
+                
+                // Calculate recommended tree count based on sample size
+                int recommended_trees;
+                std::string size_category;
+                if (nsamples < 500) {
+                    recommended_trees = nsamples * 8;
+                    size_category = "8-10× samples";
+                } else if (nsamples < 2000) {
+                    recommended_trees = nsamples * 6;
+                    size_category = "6-8× samples";
+                } else if (nsamples < 10000) {
+                    recommended_trees = nsamples * 5;
+                    size_category = "5-7× samples";
+                } else {
+                    recommended_trees = nsamples * 4;
+                    size_category = "3-5× samples";
+                }
+                
                 std::string warn_msg = "MDS coordinates have " + std::to_string(n_duplicates) + 
                     " duplicate points (" + std::to_string(static_cast<int>(pct_duplicates)) + "% of " + 
                     std::to_string(nsamples) + " samples). Only " + std::to_string(n_unique) + 
                     " unique positions will be visible. This typically indicates insufficient tree coverage " +
-                    "for proximity computation. Consider increasing ntree (recommend 100+ for stable MDS).";
+                    "for proximity computation. Recommend ntree ≥ " + std::to_string(recommended_trees) + 
+                    " (" + size_category + ") for complete MDS coverage.";
                 warnings.attr("warn")(warn_msg, py::module_::import("builtins").attr("UserWarning"));
             }
             
@@ -1488,7 +1507,7 @@ PYBIND11_MODULE(RFX, m) {
         }
         
         // Destructor - safely clean up raw pointer and progress bar
-        // CRITICAL: This must be exception-safe for Jupyter notebooks
+        // This must be exception-safe for Jupyter notebooks
         ~RandomForestRegressor() {
             // Wrap entire destructor in try-catch to prevent any exceptions from propagating
             // In Jupyter, exceptions in destructors can cause kernel crashes
@@ -1808,7 +1827,7 @@ PYBIND11_MODULE(RFX, m) {
             rf::integer_t mdim = rf_->get_n_features();
             py::array_t<rf::real_t> importances(mdim);
             const rf::real_t* imp_ptr = rf_->get_feature_importances();
-            // CRITICAL: Check if pointer is valid before copying
+            // Check if pointer is valid before copying
             // If compute_importance=False, feature_importances_ may be empty
             if (imp_ptr != nullptr) {
                 std::copy(imp_ptr, imp_ptr + mdim, importances.mutable_data());
@@ -1854,7 +1873,7 @@ PYBIND11_MODULE(RFX, m) {
             auto buf = result.request();
             
             if (proximity_ptr) {
-                // CRITICAL WARNING: If proximity_ptr was reconstructed from low-rank factors,
+                // WARNING: If proximity_ptr was reconstructed from low-rank factors,
                 // this required O(n²) memory and may have crashed the system for large datasets!
                 // Check if low-rank mode was active (use_qlora=True) - reconstruction is expensive
                 if (rf_->get_compute_proximity()) {
@@ -1866,7 +1885,7 @@ PYBIND11_MODULE(RFX, m) {
                 }
                 
                 // Convert from dp_t to real_t
-                // CRITICAL: Copy data immediately while holding reference to model
+                // Copy data immediately while holding reference to model
                 // This ensures the proximity matrix vector is not moved or cleared during copy
                 // Use element-by-element copy with bounds checking to avoid memory corruption
                 rf::real_t* dest = static_cast<rf::real_t*>(buf.ptr);
@@ -1968,7 +1987,7 @@ PYBIND11_MODULE(RFX, m) {
             // Call C++ CPU MDS implementation (uses LAPACK)
             // Pass OOB counts for RF-GAP normalization only if RF-GAP is actually enabled
             // Note: If RF-GAP was computed as full matrix, it's already normalized by |Si| in cpu_proximity_rfgap
-            // But if proximity matrix was reconstructed from low-rank factors (QLoRA), we need to normalize here
+            // But if proximity matrix was reconstructed from low-rank factors (QLoRA), normalization is required here
             // Get OOB counts for RF-GAP normalization if available
             const rf::integer_t* oob_counts = rf_->get_nout_ptr();
             // Only normalize by OOB counts if RF-GAP is actually enabled
@@ -2017,11 +2036,30 @@ PYBIND11_MODULE(RFX, m) {
             py::ssize_t n_duplicates = nsamples - n_unique;
             if (n_duplicates > 0) {
                 double pct_duplicates = (static_cast<double>(n_duplicates) / nsamples) * 100.0;
+                
+                // Calculate recommended tree count based on sample size
+                int recommended_trees;
+                std::string size_category;
+                if (nsamples < 500) {
+                    recommended_trees = nsamples * 8;
+                    size_category = "8-10× samples";
+                } else if (nsamples < 2000) {
+                    recommended_trees = nsamples * 6;
+                    size_category = "6-8× samples";
+                } else if (nsamples < 10000) {
+                    recommended_trees = nsamples * 5;
+                    size_category = "5-7× samples";
+                } else {
+                    recommended_trees = nsamples * 4;
+                    size_category = "3-5× samples";
+                }
+                
                 std::string warn_msg = "MDS coordinates have " + std::to_string(n_duplicates) + 
                     " duplicate points (" + std::to_string(static_cast<int>(pct_duplicates)) + "% of " + 
                     std::to_string(nsamples) + " samples). Only " + std::to_string(n_unique) + 
                     " unique positions will be visible. This typically indicates insufficient tree coverage " +
-                    "for proximity computation. Consider increasing ntree (recommend 100+ for stable MDS).";
+                    "for proximity computation. Recommend ntree ≥ " + std::to_string(recommended_trees) + 
+                    " (" + size_category + ") for complete MDS coverage.";
                 warnings.attr("warn")(warn_msg, py::module_::import("builtins").attr("UserWarning"));
             }
             
@@ -2202,7 +2240,7 @@ PYBIND11_MODULE(RFX, m) {
         }
         
         // Destructor - safely clean up raw pointer and progress bar
-        // CRITICAL: This must be exception-safe for Jupyter notebooks
+        // This must be exception-safe for Jupyter notebooks
         ~RandomForestUnsupervised() {
             // Wrap entire destructor in try-catch to prevent any exceptions from propagating
             // In Jupyter, exceptions in destructors can cause kernel crashes
@@ -2471,7 +2509,7 @@ PYBIND11_MODULE(RFX, m) {
             rf::integer_t mdim = rf_->get_n_features();
             py::array_t<rf::real_t> importances(mdim);
             const rf::real_t* imp_ptr = rf_->get_feature_importances();
-            // CRITICAL: Check if pointer is valid before copying
+            // Check if pointer is valid before copying
             // If compute_importance=False, feature_importances_ may be empty
             if (imp_ptr != nullptr) {
                 std::copy(imp_ptr, imp_ptr + mdim, importances.mutable_data());
@@ -2517,7 +2555,7 @@ PYBIND11_MODULE(RFX, m) {
             auto buf = result.request();
             
             if (proximity_ptr) {
-                // CRITICAL WARNING: If proximity_ptr was reconstructed from low-rank factors,
+                // WARNING: If proximity_ptr was reconstructed from low-rank factors,
                 // this required O(n²) memory and may have crashed the system for large datasets!
                 // Check if low-rank mode was active (use_qlora=True) - reconstruction is expensive
                 if (rf_->get_compute_proximity()) {
@@ -2529,7 +2567,7 @@ PYBIND11_MODULE(RFX, m) {
                 }
                 
                 // Convert from dp_t to real_t
-                // CRITICAL: Copy data immediately while holding reference to model
+                // Copy data immediately while holding reference to model
                 // This ensures the proximity matrix vector is not moved or cleared during copy
                 // Use element-by-element copy with bounds checking to avoid memory corruption
                 rf::real_t* dest = static_cast<rf::real_t*>(buf.ptr);
@@ -2631,7 +2669,7 @@ PYBIND11_MODULE(RFX, m) {
             // Call C++ CPU MDS implementation (uses LAPACK)
             // Pass OOB counts for RF-GAP normalization only if RF-GAP is actually enabled
             // Note: If RF-GAP was computed as full matrix, it's already normalized by |Si| in cpu_proximity_rfgap
-            // But if proximity matrix was reconstructed from low-rank factors (QLoRA), we need to normalize here
+            // But if proximity matrix was reconstructed from low-rank factors (QLoRA), normalization is required here
             // Get OOB counts for RF-GAP normalization if available
             const rf::integer_t* oob_counts = rf_->get_nout_ptr();
             // Only normalize by OOB counts if RF-GAP is actually enabled
@@ -2680,11 +2718,30 @@ PYBIND11_MODULE(RFX, m) {
             py::ssize_t n_duplicates = nsamples - n_unique;
             if (n_duplicates > 0) {
                 double pct_duplicates = (static_cast<double>(n_duplicates) / nsamples) * 100.0;
+                
+                // Calculate recommended tree count based on sample size
+                int recommended_trees;
+                std::string size_category;
+                if (nsamples < 500) {
+                    recommended_trees = nsamples * 8;
+                    size_category = "8-10× samples";
+                } else if (nsamples < 2000) {
+                    recommended_trees = nsamples * 6;
+                    size_category = "6-8× samples";
+                } else if (nsamples < 10000) {
+                    recommended_trees = nsamples * 5;
+                    size_category = "5-7× samples";
+                } else {
+                    recommended_trees = nsamples * 4;
+                    size_category = "3-5× samples";
+                }
+                
                 std::string warn_msg = "MDS coordinates have " + std::to_string(n_duplicates) + 
                     " duplicate points (" + std::to_string(static_cast<int>(pct_duplicates)) + "% of " + 
                     std::to_string(nsamples) + " samples). Only " + std::to_string(n_unique) + 
                     " unique positions will be visible. This typically indicates insufficient tree coverage " +
-                    "for proximity computation. Consider increasing ntree (recommend 100+ for stable MDS).";
+                    "for proximity computation. Recommend ntree ≥ " + std::to_string(recommended_trees) + 
+                    " (" + size_category + ") for complete MDS coverage.";
                 warnings.attr("warn")(warn_msg, py::module_::import("builtins").attr("UserWarning"));
             }
             
@@ -3252,7 +3309,7 @@ fig.update_scenes(
                 
                 function clearAllSelections() {
                     // Force clear even if updating - user explicitly requested clear via keyboard/button
-                    // But check if we're already in the middle of clearing to avoid race conditions
+                    // But check if already in the middle of clearing to avoid race conditions
                     const wasUpdating = isUpdating;
                     isUpdating = true;
                     
@@ -3381,7 +3438,7 @@ fig.update_scenes(
                                 finalPromises.push(Plotly.restyle(gd, {selectedpoints: null}, scatter2DTraces));
                             }
                             
-                            // CRITICAL: Reset 3D markers AGAIN after layout update to ensure they're cleared
+                            // Reset 3D markers AGAIN after layout update to ensure they're cleared
                             // This is necessary because layout updates can sometimes restore marker states
                             if (markerTraceIndices.length > 0) {
                                 // Convert markerUpdates array format to Plotly.restyle format
@@ -3757,15 +3814,15 @@ fig.update_scenes(
                     
                     // Add wheel event listener to the graph div itself
                     graphDiv.addEventListener('wheel', function(event) {
-                        // Check if we're over the 3D scene
+                        // Check if over the 3D scene
                         const rect = graphDiv.getBoundingClientRect();
                         const x = event.clientX - rect.left;
                         const y = event.clientY - rect.top;
                         
-                        // Find which subplot we're over
+                        // Find which subplot is being hovered over
                         const scenes = graphDiv.querySelectorAll('.scene');
                         if (scenes.length > 0) {
-                            // We're likely over a 3D scene - allow zoom
+                            // Likely over a 3D scene - allow zoom
                             event.preventDefault();
                             
                             // Get current camera settings
@@ -4091,7 +4148,7 @@ fig.update_scenes(
 #ifdef CUDA_FOUND
     // Check if enough GPU memory available
     m.def("check_gpu_memory", [](size_t size_mb) -> bool {
-        // Ultra-safe: Only check via our CudaConfig (no direct CUDA runtime calls)
+        // Ultra-safe: Only check via CudaConfig (no direct CUDA runtime calls)
         // This avoids triggering CUDA initialization that can crash Jupyter kernels
         try {
             // Check if CudaConfig has been initialized (means CUDA context exists)
@@ -4110,7 +4167,7 @@ fig.update_scenes(
 
     // Print GPU memory status
     m.def("print_gpu_memory_status", []() {
-        // Ultra-safe: Only check via our CudaConfig (no direct CUDA runtime calls)
+        // Ultra-safe: Only check via CudaConfig (no direct CUDA runtime calls)
         // This avoids triggering CUDA initialization that can crash Jupyter kernels
         try {
             // Check if CudaConfig has been initialized (means CUDA context exists)
@@ -4118,7 +4175,7 @@ fig.update_scenes(
             
             if (!config_initialized) {
                 // Suppress messages when context is not initialized - it's expected after cleanup
-                // Users can check GPU memory manually if needed, but we don't spam them with messages
+                // Users can check GPU memory manually if needed, but messages are not spammed
                 return;
             }
             
@@ -4246,7 +4303,7 @@ fig.update_scenes(
     
     // Import and expose notebook helper functions + enable auto-storage
     // Following XGBoost pattern: embed helpers directly and auto-enable model preservation
-    // CRITICAL: Wrap in try-catch to prevent module initialization crashes
+    // Wrap in try-catch to prevent module initialization crashes
     try {
         // Pass module object to exec context to avoid circular import
         py::dict exec_globals = py::globals();
@@ -4453,10 +4510,10 @@ except Exception as e:
 # Auto-storage is now enabled! Models will be automatically preserved across cells (XGBoost-style)
 )", exec_globals);
     } catch (py::error_already_set& e) {
-        // CRITICAL: Don't let Python errors crash module initialization
+        // Don't let Python errors crash module initialization
         // Auto-storage is nice-to-have, but module must load even if it fails
         // Silently continue - models will still work, just without auto-storage
-        e.clear();  // Clear Python error state
+        // Error is automatically cleared when exception is caught
     } catch (const std::exception& e) {
         // C++ exceptions during Python exec - also safe to ignore
         // Module will still work without auto-storage

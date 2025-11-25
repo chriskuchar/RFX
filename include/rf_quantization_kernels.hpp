@@ -40,11 +40,11 @@ public:
         // This gives symmetric range around 0
         if (value >= 0.0f) {
             // Positive values: [0.0, 1.0] → [0, 7]
-            // Note: 7/7 = 1.0, so we map to [0, 7] inclusive
+            // Note: 7/7 = 1.0, so mapping is to [0, 7] inclusive
             return static_cast<uint8_t>(fminf(7.0f, roundf(value * 7.0f)));
         } else {
             // Negative values: [-1.0, 0.0) → [15, 8]
-            // Note: We want -1.0 → 15, approaching 0 → 8
+            // Note: Mapping is -1.0 → 15, approaching 0 → 8
             return static_cast<uint8_t>(fmaxf(8.0f, roundf(8.0f - value * 7.0f)));
         }
     }

@@ -113,8 +113,9 @@ public:
      * After this, temp_prox_gpu_ can be freed (huge memory savings!).
      * 
      * @param n_trees_processed Number of trees processed (for logging)
+     * @param final_call If true, quantize factors to save memory (only do this on the final call)
      */
-    void finalize_accumulation(integer_t n_trees_processed = 0);
+    void finalize_accumulation(integer_t n_trees_processed = 0, bool final_call = false);
     
     /**
      * @brief Get accumulated proximity matrix (FP32) before factorization

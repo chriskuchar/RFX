@@ -18,22 +18,11 @@ void cpu_testreebag(const real_t* x, const real_t* xbestsplit,
                    integer_t mdim, integer_t nnode, integer_t maxcat,
                    integer_t* jtr, integer_t* nodextr) {
     
-    // DEBUG output disabled for production
-    // printf("DEBUG: cpu_testreebag ENTRY - nsample=%d, mdim=%d, nnode=%d, maxcat=%d\n",
-    //        static_cast<int>(nsample), static_cast<int>(mdim), static_cast<int>(nnode), static_cast<int>(maxcat));
-    // fflush(stdout);
-    
     // Initialize output arrays
-    // printf("DEBUG: About to initialize output arrays\n");
-    // fflush(stdout);
     zerv(jtr, nsample);
     zerv(nodextr, nsample);
-    // printf("DEBUG: Output arrays initialized\n");
-    // fflush(stdout);
     
     integer_t oob_count = 0;
-    // printf("DEBUG: About to count OOB samples, nsample=%d\n", static_cast<int>(nsample));
-    // fflush(stdout);
     
     // Safety check: verify nin pointer is valid
     if (nin == nullptr) {
@@ -42,36 +31,12 @@ void cpu_testreebag(const real_t* x, const real_t* xbestsplit,
         return;
     }
     
-    // printf("DEBUG: nin pointer is valid, starting count loop\n");
-    // fflush(stdout);
-    
-    // Test first few accesses
-    // printf("DEBUG: Testing first 10 nin values: ");
-    // for (integer_t i = 0; i < std::min(10, static_cast<integer_t>(nsample)); ++i) {
-    //     printf("%d ", static_cast<int>(nin[i]));
-    // }
-    // printf("\n");
-    // fflush(stdout);
-    
     for (integer_t i = 0; i < nsample; ++i) {
-        // if (i % 20000 == 0 && i > 0) {
-        //     printf("DEBUG: Counting OOB samples, progress: %d/%d, oob_count so far=%d\n", 
-        //            static_cast<int>(i), static_cast<int>(nsample), static_cast<int>(oob_count));
-        //     fflush(stdout);
-        // }
         if (nin[i] == 0) oob_count++;
     }
-    // printf("DEBUG: Found %d out-of-bag samples\n", static_cast<int>(oob_count));
-    // fflush(stdout);
     
     // For each sample
-    // printf("DEBUG: Starting sample loop, nsample=%d\n", static_cast<int>(nsample));
-    // fflush(stdout);
     for (integer_t n = 0; n < nsample; ++n) {
-        // if (n % 10000 == 0) {
-        //     printf("DEBUG: Processing sample %d\n", static_cast<int>(n));
-        //     fflush(stdout);
-        // }
         if (nin[n] == 0) {  // Only out-of-bag samples
             integer_t kt = 0;  // Start at root node
             integer_t traversal_count = 0;
@@ -142,7 +107,7 @@ void cpu_testreebag(const real_t* x, const real_t* xbestsplit,
             }
             
             // Store results
-            // If we ended on a node with status 2 (non-terminal but not split), it should still have a class
+            // If traversal ended on a node with status 2 (non-terminal but not split), it should still have a class
             // If status is -1 (terminal), use nodeclass directly
             if (nodestatus[kt] == -1 || nodestatus[kt] == 2) {
                 jtr[n] = nodeclass[kt];

@@ -357,13 +357,13 @@ __global__ void init_varimp_kernel(const integer_t* nin, const integer_t* jtr,
     }
     
     // Step 3: Mark which variables were used in splits - parallelize across threads
-    // CRITICAL: Use atomic operations to ensure thread-safe writes
+    // Use atomic operations to ensure thread-safe writes
     // Only mark variables used in actual split nodes (nodestatus == 1), not unsplit nodes (status 2)
     for (integer_t jj = tid; jj < nnode; jj += blockDim.x) {
         if (nodestatus[jj] == 1) {  // Split node (not terminal, not unsplit)
             integer_t var_idx = bestvar[jj];
             if (var_idx >= 0 && var_idx < mdim) {
-                // CRITICAL: Use atomic operation to ensure thread-safe write
+                // Use atomic operation to ensure thread-safe write
                 // Multiple threads may write to same iv[var_idx]
                 atomicExch(&iv[var_idx], 1);
             }
@@ -760,7 +760,7 @@ void gpu_varimp(const real_t* x, integer_t nsample, integer_t mdim,
     // Copy current values from host to device for accumulation
     CUDA_CHECK_VOID(cudaMemcpy(qimp_d, qimp, nsample * sizeof(real_t), cudaMemcpyHostToDevice));
     CUDA_CHECK_VOID(cudaMemcpy(qimpm_d, qimpm, nsample * mdim * sizeof(real_t), cudaMemcpyHostToDevice));
-    // CRITICAL: Initialize avimp_d and sqsd_d to zero on device before accumulation
+    // Initialize avimp_d and sqsd_d to zero on device before accumulation
     // Do NOT copy from host - we want to accumulate fresh for each tree
     CUDA_CHECK_VOID(cudaMemset(avimp_d, 0, mdim * sizeof(real_t)));
     CUDA_CHECK_VOID(cudaMemset(sqsd_d, 0, mdim * sizeof(real_t)));
@@ -820,7 +820,7 @@ void gpu_varimp(const real_t* x, integer_t nsample, integer_t mdim,
     CUDA_CHECK_VOID(cudaStreamSynchronize(0));  // Use stream sync for Jupyter safety
     
     // STEP 2: Initialize OOB samples, original accuracy, and iv array
-    // CRITICAL: Run initialization kernel with single block to ensure proper setup
+    // Run initialization kernel with single block to ensure proper setup
     // This kernel initializes: joob, noob_ptr, right_ptr, qimp (if impn==1), and iv
     dim3 init_block_size(256);
     dim3 init_kernel_grid_size(1);  // Single block for initialization
@@ -831,7 +831,7 @@ void gpu_varimp(const real_t* x, integer_t nsample, integer_t mdim,
         nodestatus_d, bestvar_d, mdim, iv_d, use_casewise
     );
     
-    // CRITICAL: Synchronize after initialization to ensure all writes are visible
+    // Synchronize after initialization to ensure all writes are visible
     // This ensures iv array and other initialized values are visible to all blocks
     CUDA_CHECK_VOID(cudaDeviceSynchronize());
     
@@ -844,7 +844,7 @@ void gpu_varimp(const real_t* x, integer_t nsample, integer_t mdim,
         tnodewt_d, nodextr_d, joob_d, pjoob_d, iv_d, noob_ptr_d, right_ptr_d, random_states_d, use_casewise
     );
     
-    // CRITICAL: Synchronize to ensure all blocks complete before copying results
+    // Synchronize to ensure all blocks complete before copying results
     CUDA_CHECK_VOID(cudaDeviceSynchronize());  // Full device sync for cross-block visibility
     auto time_kernel_end = std::chrono::high_resolution_clock::now();
     auto kernel_duration = std::chrono::duration_cast<std::chrono::milliseconds>(time_kernel_end - time_kernel_start);
@@ -896,6 +896,203 @@ void gpu_varimp(const real_t* x, integer_t nsample, integer_t mdim,
     auto time_total_end = std::chrono::high_resolution_clock::now();
     
     // std::cout << "GPU: Variable importance computation completed." << std::endl;
+}
+
+// ============================================================================
+// GPU VARIMP CONTEXT - Reusable GPU memory for batched importance computation  
+// ============================================================================
+
+struct GPUVarImpContext {
+    real_t* x_d; integer_t* cl_d; integer_t* nin_d; integer_t* jtr_d;
+    real_t* qimp_d; real_t* qimpm_d; real_t* avimp_d; real_t* sqsd_d;
+    integer_t* treemap_d; integer_t* nodestatus_d; real_t* xbestsplit_d; integer_t* bestvar_d;
+    integer_t* nodeclass_d; integer_t* cat_d; integer_t* jvr_d; integer_t* nodexvr_d;
+    integer_t* catgoleft_d; real_t* tnodewt_d; integer_t* nodextr_d;
+    integer_t* joob_d; integer_t* pjoob_d; integer_t* iv_d;
+    integer_t* noob_ptr_d; real_t* right_ptr_d; curandState* random_states_d;
+    real_t* y_regression_d; real_t* win_d; integer_t* jinbag_d;
+    integer_t nsample, mdim, maxnode, maxcat, max_ninbag;
+    bool allocated, static_data_copied, random_states_initialized, importance_arrays_initialized;
+    GPUVarImpContext() : allocated(false), static_data_copied(false), random_states_initialized(false), importance_arrays_initialized(false) {}
+};
+
+GPUVarImpContext* gpu_varimp_alloc_context(integer_t nsample, integer_t mdim, integer_t maxnode, integer_t maxcat,
+                                           integer_t max_ninbag, integer_t nclass, integer_t grid_size_x, integer_t block_size_x) {
+    
+    // Check available GPU memory BEFORE allocating to avoid blocking
+    size_t free_mem, total_mem;
+    cudaError_t mem_check = cudaMemGetInfo(&free_mem, &total_mem);
+    if (mem_check != cudaSuccess) {
+        std::cerr << "Warning: Failed to check GPU memory, skipping GPU local importance" << std::endl;
+        return nullptr;
+    }
+    
+    // Estimate required memory (rough calculation)
+    size_t required_mem = (
+        nsample * mdim * sizeof(real_t) +           // x_d
+        nsample * mdim * sizeof(real_t) +           // qimpm_d
+        2 * maxnode * sizeof(integer_t) +           // treemap_d
+        maxcat * maxnode * sizeof(integer_t) +      // catgoleft_d
+        grid_size_x * block_size_x * sizeof(curandState) + // random_states_d
+        nsample * 10 * sizeof(integer_t) +          // various sample arrays
+        maxnode * 5 * sizeof(real_t)                // various node arrays
+    );
+    
+    // Need at least 100MB safety margin
+    if (free_mem < required_mem + 100 * 1024 * 1024) {
+        std::cerr << "Warning: Insufficient GPU memory for local importance context" << std::endl;
+        std::cerr << "  Required: " << (required_mem / 1024 / 1024) << " MB" << std::endl;
+        std::cerr << "  Available: " << (free_mem / 1024 / 1024) << " MB" << std::endl;
+        std::cerr << "  Falling back to old per-tree allocation (slower)" << std::endl;
+        return nullptr;  // Gracefully fail - will use old gpu_varimp() path
+    }
+    
+    GPUVarImpContext* ctx = new GPUVarImpContext();
+    ctx->nsample = nsample; ctx->mdim = mdim; ctx->maxnode = maxnode; ctx->maxcat = maxcat; ctx->max_ninbag = max_ninbag;
+    
+    // Initialize all pointers to nullptr FIRST (safe for cudaFree)
+    ctx->x_d = nullptr; ctx->cl_d = nullptr; ctx->nin_d = nullptr; ctx->jtr_d = nullptr;
+    ctx->qimp_d = nullptr; ctx->qimpm_d = nullptr; ctx->avimp_d = nullptr; ctx->sqsd_d = nullptr;
+    ctx->treemap_d = nullptr; ctx->nodestatus_d = nullptr; ctx->xbestsplit_d = nullptr; ctx->bestvar_d = nullptr;
+    ctx->nodeclass_d = nullptr; ctx->cat_d = nullptr; ctx->jvr_d = nullptr; ctx->nodexvr_d = nullptr;
+    ctx->catgoleft_d = nullptr; ctx->tnodewt_d = nullptr; ctx->nodextr_d = nullptr;
+    ctx->joob_d = nullptr; ctx->pjoob_d = nullptr; ctx->iv_d = nullptr;
+    ctx->noob_ptr_d = nullptr; ctx->right_ptr_d = nullptr; ctx->random_states_d = nullptr;
+    ctx->y_regression_d = nullptr; ctx->win_d = nullptr; ctx->jinbag_d = nullptr;
+    
+    // Try to allocate - if ANY allocation fails, clean up and return nullptr
+    cudaError_t err;
+    
+    #define TRY_ALLOC(ptr, size, name) \
+        err = cudaMalloc((void**)&ptr, size); \
+        if (err != cudaSuccess) { \
+            std::cerr << "Warning: Failed to allocate " << name << " (" << (size/1024/1024) << " MB)" << std::endl; \
+            gpu_varimp_free_context(ctx); \
+            return nullptr; \
+        }
+    
+    TRY_ALLOC(ctx->x_d, nsample * mdim * sizeof(real_t), "x_d");
+    TRY_ALLOC(ctx->cl_d, nsample * sizeof(integer_t), "cl_d");
+    TRY_ALLOC(ctx->nin_d, nsample * sizeof(integer_t), "nin_d");
+    TRY_ALLOC(ctx->jtr_d, nsample * sizeof(integer_t), "jtr_d");
+    TRY_ALLOC(ctx->qimp_d, nsample * sizeof(real_t), "qimp_d");
+    TRY_ALLOC(ctx->qimpm_d, nsample * mdim * sizeof(real_t), "qimpm_d");
+    TRY_ALLOC(ctx->avimp_d, mdim * sizeof(real_t), "avimp_d");
+    TRY_ALLOC(ctx->sqsd_d, mdim * sizeof(real_t), "sqsd_d");
+    TRY_ALLOC(ctx->treemap_d, 2 * maxnode * sizeof(integer_t), "treemap_d");
+    TRY_ALLOC(ctx->nodestatus_d, maxnode * sizeof(integer_t), "nodestatus_d");
+    TRY_ALLOC(ctx->xbestsplit_d, maxnode * sizeof(real_t), "xbestsplit_d");
+    TRY_ALLOC(ctx->bestvar_d, maxnode * sizeof(integer_t), "bestvar_d");
+    TRY_ALLOC(ctx->nodeclass_d, maxnode * sizeof(integer_t), "nodeclass_d");
+    TRY_ALLOC(ctx->cat_d, mdim * sizeof(integer_t), "cat_d");
+    TRY_ALLOC(ctx->jvr_d, nsample * sizeof(integer_t), "jvr_d");
+    TRY_ALLOC(ctx->nodexvr_d, nsample * sizeof(integer_t), "nodexvr_d");
+    TRY_ALLOC(ctx->catgoleft_d, maxcat * maxnode * sizeof(integer_t), "catgoleft_d");
+    TRY_ALLOC(ctx->tnodewt_d, maxnode * sizeof(integer_t), "tnodewt_d");
+    TRY_ALLOC(ctx->nodextr_d, nsample * sizeof(integer_t), "nodextr_d");
+    TRY_ALLOC(ctx->joob_d, nsample * sizeof(integer_t), "joob_d");
+    TRY_ALLOC(ctx->pjoob_d, nsample * sizeof(integer_t), "pjoob_d");
+    TRY_ALLOC(ctx->iv_d, mdim * sizeof(integer_t), "iv_d");
+    TRY_ALLOC(ctx->noob_ptr_d, sizeof(integer_t), "noob_ptr_d");
+    TRY_ALLOC(ctx->right_ptr_d, sizeof(real_t), "right_ptr_d");
+    TRY_ALLOC(ctx->random_states_d, grid_size_x * block_size_x * sizeof(curandState), "random_states_d");
+    TRY_ALLOC(ctx->y_regression_d, nsample * sizeof(real_t), "y_regression_d");
+    TRY_ALLOC(ctx->win_d, nsample * sizeof(real_t), "win_d");
+    TRY_ALLOC(ctx->jinbag_d, max_ninbag * sizeof(integer_t), "jinbag_d");
+    
+    #undef TRY_ALLOC
+    
+    ctx->allocated = true;
+    return ctx;
+}
+
+void gpu_varimp_free_context(GPUVarImpContext* ctx) {
+    if (!ctx || !ctx->allocated) return;
+    cudaFree(ctx->x_d); cudaFree(ctx->cl_d); cudaFree(ctx->nin_d); cudaFree(ctx->jtr_d);
+    cudaFree(ctx->qimp_d); cudaFree(ctx->qimpm_d); cudaFree(ctx->avimp_d); cudaFree(ctx->sqsd_d);
+    cudaFree(ctx->treemap_d); cudaFree(ctx->nodestatus_d); cudaFree(ctx->xbestsplit_d); cudaFree(ctx->bestvar_d);
+    cudaFree(ctx->nodeclass_d); cudaFree(ctx->cat_d); cudaFree(ctx->jvr_d); cudaFree(ctx->nodexvr_d);
+    cudaFree(ctx->catgoleft_d); cudaFree(ctx->tnodewt_d); cudaFree(ctx->nodextr_d);
+    cudaFree(ctx->joob_d); cudaFree(ctx->pjoob_d); cudaFree(ctx->iv_d);
+    cudaFree(ctx->noob_ptr_d); cudaFree(ctx->right_ptr_d); cudaFree(ctx->random_states_d);
+    cudaFree(ctx->y_regression_d); cudaFree(ctx->win_d); cudaFree(ctx->jinbag_d);
+    delete ctx;
+}
+
+void gpu_varimp_with_context(GPUVarImpContext* ctx, const real_t* x, integer_t nsample, integer_t mdim,
+                             const integer_t* cl, const integer_t* nin, const integer_t* jtr, integer_t impn,
+                             real_t* qimp, real_t* qimpm, real_t* avimp, real_t* sqsd,
+                             const integer_t* treemap, const integer_t* nodestatus, const real_t* xbestsplit,
+                             const integer_t* bestvar, const integer_t* nodeclass, integer_t nnode,
+                             const integer_t* cat, integer_t* jvr, integer_t* nodexvr, integer_t maxcat,
+                             const integer_t* catgoleft, const real_t* tnodewt, const integer_t* nodextr,
+                             const real_t* y_regression, const real_t* win, const integer_t* jinbag,
+                             integer_t ninbag, integer_t nclass, integer_t task_type) {
+    if (!ctx || !ctx->allocated) return;
+    
+    if (!ctx->static_data_copied) {
+        CUDA_CHECK_VOID(cudaMemcpy(ctx->x_d, x, nsample * mdim * sizeof(real_t), cudaMemcpyHostToDevice));
+        if (cl) CUDA_CHECK_VOID(cudaMemcpy(ctx->cl_d, cl, nsample * sizeof(integer_t), cudaMemcpyHostToDevice));
+        CUDA_CHECK_VOID(cudaMemcpy(ctx->cat_d, cat, mdim * sizeof(integer_t), cudaMemcpyHostToDevice));
+        ctx->static_data_copied = true;
+    }
+    
+    CUDA_CHECK_VOID(cudaMemcpy(ctx->nin_d, nin, nsample * sizeof(integer_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK_VOID(cudaMemcpy(ctx->jtr_d, jtr, nsample * sizeof(integer_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK_VOID(cudaMemcpy(ctx->treemap_d, treemap, 2 * nnode * sizeof(integer_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK_VOID(cudaMemcpy(ctx->nodestatus_d, nodestatus, nnode * sizeof(integer_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK_VOID(cudaMemcpy(ctx->xbestsplit_d, xbestsplit, nnode * sizeof(real_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK_VOID(cudaMemcpy(ctx->bestvar_d, bestvar, nnode * sizeof(integer_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK_VOID(cudaMemcpy(ctx->nodeclass_d, nodeclass, nnode * sizeof(integer_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK_VOID(cudaMemcpy(ctx->nodextr_d, nodextr, nsample * sizeof(integer_t), cudaMemcpyHostToDevice));
+    if (tnodewt) CUDA_CHECK_VOID(cudaMemcpy(ctx->tnodewt_d, tnodewt, nnode * sizeof(real_t), cudaMemcpyHostToDevice));
+    if (jinbag && ninbag > 0) CUDA_CHECK_VOID(cudaMemcpy(ctx->jinbag_d, jinbag, ninbag * sizeof(integer_t), cudaMemcpyHostToDevice));
+    
+    // Only zero importance arrays ONCE at start, then accumulate across all trees
+    if (!ctx->importance_arrays_initialized) {
+        CUDA_CHECK_VOID(cudaMemset(ctx->qimp_d, 0, nsample * sizeof(real_t)));
+        CUDA_CHECK_VOID(cudaMemset(ctx->qimpm_d, 0, nsample * mdim * sizeof(real_t)));
+        CUDA_CHECK_VOID(cudaMemset(ctx->avimp_d, 0, mdim * sizeof(real_t)));
+        CUDA_CHECK_VOID(cudaMemset(ctx->sqsd_d, 0, mdim * sizeof(real_t)));
+        ctx->importance_arrays_initialized = true;
+    }
+    
+    dim3 block_size(256);
+    dim3 grid_size(mdim);
+    
+    if (!ctx->random_states_initialized) {
+        init_random_states_kernel<<<grid_size, block_size>>>(ctx->random_states_d, 12345);
+        CUDA_CHECK_VOID(cudaDeviceSynchronize());
+        ctx->random_states_initialized = true;
+    }
+    
+    integer_t use_casewise = g_config.use_casewise ? 1 : 0;
+    
+    // Must call init kernel first to set up noob_ptr, right_ptr, and iv arrays
+    dim3 init_block_size(256);
+    dim3 init_kernel_grid_size(1);  // Single block for initialization
+    init_varimp_kernel<<<init_kernel_grid_size, init_block_size>>>(
+        ctx->nin_d, ctx->jtr_d, ctx->cl_d, ctx->nodextr_d, ctx->tnodewt_d, nsample,
+        ctx->joob_d, ctx->noob_ptr_d, ctx->right_ptr_d,
+        impn, ctx->qimp_d, nnode,
+        ctx->nodestatus_d, ctx->bestvar_d,
+        mdim, ctx->iv_d, use_casewise);
+    CUDA_CHECK_VOID(cudaDeviceSynchronize());
+    
+    cuda_varimp_kernel<<<grid_size, block_size>>>(ctx->x_d, nsample, mdim, ctx->cl_d, ctx->nin_d, ctx->jtr_d,
+        impn, ctx->qimp_d, ctx->qimpm_d, ctx->avimp_d, ctx->sqsd_d, ctx->treemap_d, ctx->nodestatus_d,
+        ctx->xbestsplit_d, ctx->bestvar_d, ctx->nodeclass_d, nnode, ctx->cat_d, ctx->jvr_d, ctx->nodexvr_d,
+        maxcat, nullptr, ctx->tnodewt_d, ctx->nodextr_d, ctx->joob_d, ctx->pjoob_d, ctx->iv_d,
+        ctx->noob_ptr_d, ctx->right_ptr_d, ctx->random_states_d, use_casewise);
+    
+    CUDA_CHECK_VOID(cudaDeviceSynchronize());
+    
+    CUDA_CHECK_VOID(cudaMemcpy(qimp, ctx->qimp_d, nsample * sizeof(real_t), cudaMemcpyDeviceToHost));
+    if (impn == 1) {
+        CUDA_CHECK_VOID(cudaMemcpy(qimpm, ctx->qimpm_d, nsample * mdim * sizeof(real_t), cudaMemcpyDeviceToHost));
+    }
+    CUDA_CHECK_VOID(cudaMemcpy(avimp, ctx->avimp_d, mdim * sizeof(real_t), cudaMemcpyDeviceToHost));
+    CUDA_CHECK_VOID(cudaMemcpy(sqsd, ctx->sqsd_d, mdim * sizeof(real_t), cudaMemcpyDeviceToHost));
 }
 
 } // namespace rf

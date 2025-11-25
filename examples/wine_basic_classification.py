@@ -11,10 +11,7 @@ Complete example showing:
 This reproduces the "Basic Classification" example from the README.
 """
 
-import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'python'))
-
 import numpy as np
 import RFX as rf
 

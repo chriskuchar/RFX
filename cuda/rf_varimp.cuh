@@ -42,6 +42,24 @@ void testreeimp_cpu_fallback(const real_t* x, integer_t nsample, integer_t mdim,
 
 void permobmr_cpu_fallback(const integer_t* joob, integer_t* pjoob, integer_t noob);
 
+// GPU Variable Importance Context (reusable memory allocation)
+struct GPUVarImpContext;
+
+GPUVarImpContext* gpu_varimp_alloc_context(integer_t nsample, integer_t mdim, integer_t maxnode, integer_t maxcat,
+                                           integer_t max_ninbag, integer_t nclass, integer_t grid_size_x, integer_t block_size_x);
+
+void gpu_varimp_free_context(GPUVarImpContext* ctx);
+
+void gpu_varimp_with_context(GPUVarImpContext* ctx, const real_t* x, integer_t nsample, integer_t mdim,
+                             const integer_t* cl, const integer_t* nin, const integer_t* jtr, integer_t impn,
+                             real_t* qimp, real_t* qimpm, real_t* avimp, real_t* sqsd,
+                             const integer_t* treemap, const integer_t* nodestatus, const real_t* xbestsplit,
+                             const integer_t* bestvar, const integer_t* nodeclass, integer_t nnode,
+                             const integer_t* cat, integer_t* jvr, integer_t* nodexvr, integer_t maxcat,
+                             const integer_t* catgoleft, const real_t* tnodewt, const integer_t* nodextr,
+                             const real_t* y_regression, const real_t* win, const integer_t* jinbag,
+                             integer_t ninbag, integer_t nclass, integer_t task_type);
+
 } // namespace rf
 
 // CUDA kernel declarations (must be outside namespace)

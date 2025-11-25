@@ -262,7 +262,7 @@ void ParallelTreeGrowingManager::grow_single_tree(
     
     // Grow tree using vectorized operations
     // This would call the actual tree growing algorithm
-    // For now, we'll simulate the work
+    // For now, the work is simulated
     
     // Test on OOB samples
     test_tree_oob(local_data, task);
@@ -480,12 +480,7 @@ double PerformanceMonitor::get_duration_ms(const std::string& name) const {
 
 void PerformanceMonitor::print_statistics() const {
     std::lock_guard<std::mutex> lock(mutex_);
-    
-    // std::cout << "\n=== Performance Statistics ===\n";
-    for (const auto& pair : timings_) {
-        // std::cout << pair.first << ": " << pair.second.duration_ms << " ms\n";
-    }
-    // std::cout << "==============================\n";
+    // Statistics collection only - no output for production
 }
 
 void PerformanceMonitor::reset() {

@@ -467,7 +467,7 @@ void cpu_growtree(
                                 current_node = treemap[current_node * 2 + 1];
                             }
                             
-                            // Check if we've gone beyond the current processing node
+                            // Check if traversal has gone beyond the current processing node
                             if (current_node > kgrow) {
                                 reaches_node = false;
                                 break;
@@ -527,8 +527,8 @@ void cpu_growtree(
         if (nclass == 1) {
             // Regression: calculate MSE/variance to determine if splitting is beneficial
             // NOTE: For regression, cl contains integer-cast y values which lose precision
-            // We need to use a scaled version or check if variance is non-zero after scaling
-            // Since small y values (0.1, 0.2) become 0 when cast to int, we scale them first
+            // A scaled version must be used or variance checked if non-zero after scaling
+            // Since small y values (0.1, 0.2) become 0 when cast to int, they are scaled first
             real_t sum_y = 0.0f;
             real_t sum_y2 = 0.0f;
             integer_t n_samples = 0;
@@ -734,7 +734,7 @@ void cpu_growtree(
             }
         }
         
-        // Check if we found a good split
+        // Check if a good split was found
         if (nclass == 1) {
             // Regression: check if MSE reduction is significant
             real_t mse_reduction = crit0 - best_crit;
@@ -880,7 +880,7 @@ void cpu_growtree(
                         
                         if (reaches_node && current_node == node) {
                             // For regression, cl contains integer-cast y values (scaled by y_scale=1000)
-                            // We need to unscale to get the actual continuous value in original scale
+                            // Unscaling is required to get the actual continuous value in original scale
                             // This matches the original Fortran algorithm which doesn't scale
                             const real_t y_scale = 1000.0f;  // Must match the scale used in rf_random_forest.cpp
                             real_t y_val = static_cast<real_t>(cl[sample_idx]) / y_scale;  // Unscale to original
