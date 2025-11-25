@@ -500,7 +500,7 @@ Both modes are statistically valid; case-wise mode follows the unreleased Fortra
 
 ## Examples
 
-The `examples/` folder contains scripts to reproduce all results from the arXiv paper:
+The `examples/` folder contains comprehensive demonstration scripts and validation examples:
 
 ### Getting Started
 - **`wine_basic_classification.py`** - **Start here!** Complete example reproducing all Quick Start code:
@@ -512,20 +512,20 @@ The `examples/` folder contains scripts to reproduce all results from the arXiv 
   - All using RFX built-in functions (no sklearn needed)
 
 ### Classification Examples
-- `test_wine_step1_oob.py` - OOB error and confusion matrix (Table 6, Table 7)
-- `test_wine_step2_importance.py` - Overall importance comparison (Table 5)
+- `test_wine_step1_oob.py` - OOB error and confusion matrix
+- `test_wine_step2_importance.py` - Overall importance comparison
 - `test_wine_step3_local_importance.py` - Local importance benchmarking
 
 ### Proximity Examples
 - `test_proximity_4way.py` - 4-way proximity comparison (GPU/CPU × casewise/non-casewise)
-- `test_quantization_comparison.py` - Quantization level comparison (Table 8)
+- `test_quantization_comparison.py` - Quantization level comparison
 - `test_final_quantization_1000trees.py` - 1000-tree validation
 - `test_cpu_block_sparse.py` - CPU TriBlock proximity
 - `test_block_sparse_thresholds.py` - Block-sparse threshold analysis
 
 ### Visualization Examples
-- `test_oob_convergence_1k.py` - OOB convergence plot (Figure 4)
-- `test_wine_gpu_rfviz.py` - RFviz 2×2 grid visualization (Figure 8)
+- `test_oob_convergence_1k.py` - OOB convergence plot
+- `test_wine_gpu_rfviz.py` - RFviz 2×2 grid visualization
 
 ### Run Examples
 
