@@ -108,11 +108,11 @@ class RFviz:
             'NF4': '#96CEB4'      # Green
         }
         
-        print(f"🎨 RFviz initialized with ultra-modern styling")
+        print(f"RFviz initialized with ultra-modern styling")
         if self.quantization_info:
             quant_name = self.quantization_info.get('name', 'Unknown')
-            print(f"   📊 Quantization: {quant_name}")
-            print(f"   💾 Memory Reduction: {self.quantization_info.get('memory_reduction', 1.0):.1f}x")
+            print(f"   Quantization: {quant_name}")
+            print(f"   Memory Reduction: {self.quantization_info.get('memory_reduction', 1.0):.1f}x")
             print(f"   🎯 Expected Accuracy: {self.quantization_info.get('accuracy', 100.0):.1f}%")
     
     def _prepare_data(self):
@@ -172,14 +172,14 @@ class RFviz:
         ax.add_patch(rect)
         
         # Title
-        ax.text(0.5, 0.85, f'🚀 {quant_name} Quantization', 
+        ax.text(0.5, 0.85, f'{quant_name} Quantization', 
                 ha='center', va='center', fontsize=14, fontweight='bold',
                 color=self.colors['text'])
         
         # Info text
         info_text = f"""
-📊 {bits}-bit precision
-💾 {memory_reduction:.1f}x memory reduction
+{bits}-bit precision
+{memory_reduction:.1f}x memory reduction
 🎯 {accuracy:.1f}% accuracy
 ⚡ Ultra-optimized performance
         """
@@ -420,7 +420,7 @@ class RFviz:
         cbar.set_label('Importance')
         
         # Add main title
-        fig.suptitle('🚀 Ultra-Modern Random Forest Visualization Dashboard', 
+        fig.suptitle('Ultra-Modern Random Forest Visualization Dashboard', 
                     fontsize=20, fontweight='bold', color=self.colors['text'])
         
         if self.export_plots:
@@ -441,12 +441,12 @@ class RFviz:
         elif plot_type == 'mds':
             return self.proximity_mds_plot(highlighted_indices=indices)
         else:
-            print(f"⚠️  Unknown plot type: {plot_type}")
+            print(f" Unknown plot type: {plot_type}")
             return None
     
     def export_all_plots(self):
         """Export all visualizations"""
-        print(f"📊 Exporting all visualizations to '{self.output_dir}/'")
+        print(f"Exporting all visualizations to '{self.output_dir}/'")
         
         # Create individual plots
         self.parallel_coordinates()
@@ -454,9 +454,9 @@ class RFviz:
         self.proximity_mds_plot()
         self.create_dashboard()
         
-        print(f"✅ All plots exported successfully!")
+        print(f"All plots exported successfully!")
         print(f"   📁 Directory: {self.output_dir}/")
-        print(f"   📈 Files: parallel_coordinates.png, feature_importance.png, proximity_mds.png, dashboard.png")
+        print(f"   Files: parallel_coordinates.png, feature_importance.png, proximity_mds.png, dashboard.png")
 
 # Convenience function for easy usage
 def rfviz(rf_model, X, y=None, feature_names=None, target_names=None,

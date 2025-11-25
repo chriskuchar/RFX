@@ -49,18 +49,18 @@ print(f"OOB Error: {model.get_oob_error():.4f}")
 
 # Get low-rank factors
 A, B, rank = model.get_lowrank_factors()
-print(f"\n📊 Low-rank factors:")
+print(f"\nLow-rank factors:")
 print(f"   A.shape: {A.shape}")
 print(f"   B.shape: {B.shape}")
 print(f"   Actual rank: {rank}")
 
 if rank == 32:
-    print(f"\n✅ CORRECT: Rank is 32 (as requested)")
+    print(f"\nCORRECT: Rank is 32 (as requested)")
 else:
-    print(f"\n⚠️  NOTE: Rank is {rank}")
+    print(f"\nNOTE: Rank is {rank}")
 
 # Show first 3 columns as x,y,z
-print(f"\n📊 Low-rank factor values (first 5 samples, first 3 dims):")
+print(f"\nLow-rank factor values (first 5 samples, first 3 dims):")
 print(f"   {'Sample':<8} {'Dim0':>12} {'Dim1':>12} {'Dim2':>12}")
 print(f"   {'-'*48}")
 for i in range(min(5, n_samples)):
@@ -72,7 +72,7 @@ for i in range(min(5, n_samples)):
 # Memory comparison
 full_mem = n_samples**2 * 4 / (1024**2)
 lr_mem = 2 * n_samples * rank * 4 / (1024**2)
-print(f"\n💾 Memory:")
+print(f"\nMemory:")
 print(f"   Full matrix: {full_mem:.4f} MB")
 print(f"   Low-rank: {lr_mem:.4f} MB")
 print(f"   Compression: {full_mem/lr_mem:.1f}x")
@@ -118,7 +118,7 @@ except Exception as e:
     print(f"   MDS failed: {e}")
 
 # Generate RFViz
-print("\n🎨 Generating RFViz HTML...")
+print("\nGenerating RFViz HTML...")
 try:
     fig = rf.rfviz(
         rf_model=model,
@@ -126,16 +126,16 @@ try:
         y=y,
         feature_names=FEATURE_NAMES,
         n_clusters=3,
-        title="Wine - GPU Low-Rank INT8 (Rank=32, 20 Trees)",
+        title="Wine - GPU Low-Rank INT8 (Rank=32, 100 Trees)",
         output_file="rfviz_int8_fixed.html",
         show_in_browser=False,
         save_html=True,
         mds_k=3
     )
-    print(f"✅ RFViz HTML generated successfully!")
+    print(f"RFViz HTML generated successfully!")
     print(f"   Output: rfviz_int8_fixed.html")
 except Exception as e:
-    print(f"❌ RFViz failed: {e}")
+    print(f"RFViz failed: {e}")
     import traceback
     traceback.print_exc()
 

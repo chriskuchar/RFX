@@ -66,15 +66,15 @@ def run_experiment(X, y, n_classes, use_gpu, use_casewise, ntree=100):
     
     # Confusion Matrix (built-in)
     cm = rf.confusion_matrix(y.astype(np.int32), oob_preds.astype(np.int32))
-    print(f"\n📊 Confusion Matrix (rf.confusion_matrix):")
+    print(f"\nConfusion Matrix (rf.confusion_matrix):")
     print(cm)
     
     # Classification Report (built-in)
-    print(f"\n📊 Classification Report (rf.classification_report):")
+    print(f"\nClassification Report (rf.classification_report):")
     print(rf.classification_report(y.astype(np.int32), oob_preds.astype(np.int32)))
     
     # Overall Importance
-    print(f"\n📊 Overall Feature Importance (Top 10):")
+    print(f"\nOverall Feature Importance (Top 10):")
     sorted_idx = np.argsort(overall_imp)[::-1]
     print(f"   {'Rank':<5} {'Feature':<35} {'Importance':>12}")
     print(f"   {'-'*55}")
@@ -82,7 +82,7 @@ def run_experiment(X, y, n_classes, use_gpu, use_casewise, ntree=100):
         print(f"   {rank:<5} {FEATURE_NAMES[idx]:<35} {overall_imp[idx]:>12.6f}")
     
     # Local Importance Statistics
-    print(f"\n📊 Local Importance (per-sample):")
+    print(f"\nLocal Importance (per-sample):")
     print(f"   Shape: {local_imp.shape} (samples × features)")
     
     local_mean = np.mean(local_imp, axis=0)
@@ -132,7 +132,7 @@ def main():
     n_samples, n_features = X.shape
     n_classes = len(np.unique(y))
     
-    print(f"\n📂 Dataset: Wine (UCI ML - built-in)")
+    print(f"\nDataset: Wine (UCI ML - built-in)")
     print(f"   Samples: {n_samples}")
     print(f"   Features: {n_features}")
     print(f"   Classes: {n_classes}")
@@ -159,7 +159,7 @@ def main():
     print("=" * 70)
     
     # Overall importance correlation matrix
-    print("\n📊 Overall Importance Spearman Correlations:")
+    print("\nOverall Importance Spearman Correlations:")
     configs = list(results.keys())
     print(f"   {'':25s}", end="")
     for c in configs:
@@ -174,7 +174,7 @@ def main():
         print()
     
     # Local importance mean correlation matrix
-    print("\n📊 Local Importance (Mean) Spearman Correlations:")
+    print("\nLocal Importance (Mean) Spearman Correlations:")
     print(f"   {'':25s}", end="")
     for c in configs:
         print(f"{results[c]['mode'][:12]:>14s}", end="")
@@ -188,7 +188,7 @@ def main():
         print()
     
     # Top features comparison
-    print("\n📊 Top 3 Features by Overall Importance:")
+    print("\nTop 3 Features by Overall Importance:")
     print(f"   {'Configuration':<25s} {'#1':<20s} {'#2':<20s} {'#3':<20s}")
     print(f"   {'-'*85}")
     for key, res in results.items():

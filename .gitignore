@@ -2,8 +2,9 @@
 build/
 cmake-build-*/
 
-# Compiled object files (but NOT the final .so module)
+# Compiled files
 *.o
+*.so
 *.a
 *.dylib
 *.dll

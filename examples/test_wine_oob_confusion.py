@@ -76,17 +76,17 @@ def run_experiment(X, y, n_classes, use_gpu, use_casewise, ntree=100):
     print(f"Training time: {elapsed:.2f}s ({ntree/elapsed:.1f} trees/sec)")
     
     # OOB Error
-    print(f"\n📊 OOB Error: {oob_error:.6f} ({oob_error*100:.2f}%)")
+    print(f"\nOOB Error: {oob_error:.6f} ({oob_error*100:.2f}%)")
     print(f"   OOB Accuracy: {(1-oob_error)*100:.2f}%")
     
     # Confusion Matrix (using RFX built-in)
     cm = rf.confusion_matrix(y.astype(np.int32), oob_preds.astype(np.int32))
-    print(f"\n📊 Confusion Matrix (rf.confusion_matrix):")
+    print(f"\nConfusion Matrix (rf.confusion_matrix):")
     print_confusion_matrix(cm, n_classes)
     
     # Classification Report (using RFX built-in)
     report_str = rf.classification_report(y.astype(np.int32), oob_preds.astype(np.int32))
-    print(f"📊 Classification Report (rf.classification_report):")
+    print(f"Classification Report (rf.classification_report):")
     print(report_str)
     
     return {
@@ -108,7 +108,7 @@ def main():
     n_samples, n_features = X.shape
     n_classes = len(np.unique(y))
     
-    print(f"\n📂 Dataset: Wine (UCI ML - built-in)")
+    print(f"\nDataset: Wine (UCI ML - built-in)")
     print(f"   Samples: {n_samples}")
     print(f"   Features: {n_features}")
     print(f"   Classes: {n_classes}")
@@ -135,32 +135,32 @@ def main():
     print("  SUMMARY COMPARISON")
     print("=" * 70)
     
-    print("\n📊 OOB Errors:")
+    print("\nOOB Errors:")
     print(f"   {'Configuration':<25s} {'OOB Error':>12s} {'Accuracy':>12s} {'Time':>10s}")
     print("   " + "-" * 60)
     for key, res in results.items():
         print(f"   {res['mode']:<25s} {res['oob_error']:>12.6f} {(1-res['oob_error'])*100:>11.2f}% {res['time']:>9.2f}s")
     
     # Note: Detailed F1 scores are printed in the classification report above
-    print("\n📊 Quick Summary:")
+    print("\nQuick Summary:")
     
-    print("\n📊 Prediction Agreement (vs GPU Non-casewise):")
+    print("\nPrediction Agreement (vs GPU Non-casewise):")
     baseline = results['gpu_ncw']['oob_preds']
     for key, res in results.items():
         if key != 'gpu_ncw':
             agreement = np.sum(res['oob_preds'] == baseline) / len(baseline)
             print(f"   {res['mode']:<25s} {agreement*100:>6.2f}% agreement")
     
-    print("\n📊 Casewise vs Non-casewise Differences:")
+    print("\nCasewise vs Non-casewise Differences:")
     gpu_diff = abs(results['gpu_cw']['oob_error'] - results['gpu_ncw']['oob_error'])
     cpu_diff = abs(results['cpu_cw']['oob_error'] - results['cpu_ncw']['oob_error'])
     print(f"   GPU:  {gpu_diff:.6f} ({gpu_diff*100:.2f}% difference)")
     print(f"   CPU:  {cpu_diff:.6f} ({cpu_diff*100:.2f}% difference)")
     
     if gpu_diff < 0.001 and cpu_diff < 0.001:
-        print("\n   ⚠️  WARNING: Casewise and non-casewise produce IDENTICAL results!")
+        print("\n   WARNING: Casewise and non-casewise produce IDENTICAL results!")
     else:
-        print("\n   ✅ Casewise and non-casewise produce DIFFERENT results (expected!)")
+        print("\n   Casewise and non-casewise produce DIFFERENT results (expected!)")
     
     print("\n" + "=" * 70)
     print("  TEST COMPLETE")

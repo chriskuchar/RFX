@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="figures/rfx_logo.png" width="400" alt="RFX Logo">
-</p>
-
 <h1 align="center">RFX</h1>
 <h3 align="center">GPU-Accelerated Random Forests with QLoRA Compression</h3>
 
@@ -98,6 +94,12 @@ rf.rfviz(
     output_file="rfviz.html"
 )
 ```
+
+<p align="center">
+  <img src="figures/rfviz_example.png" width="800" alt="RFViz Dashboard">
+  <br>
+  <em>RFViz: Input features, local importance, 3D MDS proximity, and class votes with linked brushing.</em>
+</p>
 
 ## Examples
 

@@ -850,9 +850,9 @@ PYBIND11_MODULE(RFX, m) {
                         
                         // Use Python print for proper formatting
                         py::module_ builtins = py::module_::import("builtins");
-                        builtins.attr("print")("\n💻 CPU MEMORY INFORMATION");
+                        builtins.attr("print")("\nCPU MEMORY INFORMATION");
                         builtins.attr("print")("==================================================");
-                        builtins.attr("print")("📊 System Memory:");
+                        builtins.attr("print")("System Memory:");
                         builtins.attr("print")(py::str("   Total: {:.1f} GB").format(total_gb));
                         builtins.attr("print")(py::str("   Available: {:.1f} GB").format(available_gb));
                         builtins.attr("print")(py::str("   Used: {:.1f} GB").format(used_gb));
@@ -991,7 +991,7 @@ PYBIND11_MODULE(RFX, m) {
                     rf::integer_t recommended_batch = rf::cuda::get_recommended_batch_size(config_.ntree);
                     recommended_batch = std::min(recommended_batch, config_.ntree);
                     py::module_ builtins = py::module_::import("builtins");
-                    builtins.attr("print")(py::str("🔧 Auto-scaling: Selected batch size = {} trees (out of {} total)").format(recommended_batch, config_.ntree));
+                    builtins.attr("print")(py::str("Auto-scaling: Selected batch size = {} trees (out of {} total)").format(recommended_batch, config_.ntree));
                 } catch (...) {
                     // Ignore errors - the C++ code will print it anyway via std::cout
                 }
@@ -1022,9 +1022,9 @@ PYBIND11_MODULE(RFX, m) {
                             double usage_percent = (used_mem / (double)total_mem) * 100.0;
                             
                             py::module_ builtins = py::module_::import("builtins");
-                            builtins.attr("print")("\n🚀 GPU MEMORY STATUS (After Training):");
+                            builtins.attr("print")("\nGPU MEMORY STATUS (After Training):");
                             builtins.attr("print")("==================================================");
-                            builtins.attr("print")(py::str("📊 GPU Memory:"));
+                            builtins.attr("print")(py::str("GPU Memory:"));
                             builtins.attr("print")(py::str("   Total: {:.1f} GB").format(total_gb));
                             builtins.attr("print")(py::str("   Available: {:.1f} GB").format(free_gb));
                             builtins.attr("print")(py::str("   Used: {:.1f} GB").format(used_gb));
@@ -1593,9 +1593,9 @@ PYBIND11_MODULE(RFX, m) {
                         
                         // Use Python print for proper formatting
                         py::module_ builtins = py::module_::import("builtins");
-                        builtins.attr("print")("\n💻 CPU MEMORY INFORMATION");
+                        builtins.attr("print")("\nCPU MEMORY INFORMATION");
                         builtins.attr("print")("==================================================");
-                        builtins.attr("print")("📊 System Memory:");
+                        builtins.attr("print")("System Memory:");
                         builtins.attr("print")(py::str("   Total: {:.1f} GB").format(total_gb));
                         builtins.attr("print")(py::str("   Available: {:.1f} GB").format(available_gb));
                         builtins.attr("print")(py::str("   Used: {:.1f} GB").format(used_gb));
@@ -1734,7 +1734,7 @@ PYBIND11_MODULE(RFX, m) {
                     rf::integer_t recommended_batch = rf::cuda::get_recommended_batch_size(config_.ntree);
                     recommended_batch = std::min(recommended_batch, config_.ntree);
                     py::module_ builtins = py::module_::import("builtins");
-                    builtins.attr("print")(py::str("🔧 Auto-scaling: Selected batch size = {} trees (out of {} total)").format(recommended_batch, config_.ntree));
+                    builtins.attr("print")(py::str("Auto-scaling: Selected batch size = {} trees (out of {} total)").format(recommended_batch, config_.ntree));
                 } catch (...) {
                     // Ignore errors - the C++ code will print it anyway via std::cout
                 }
@@ -1765,9 +1765,9 @@ PYBIND11_MODULE(RFX, m) {
                             double usage_percent = (used_mem / (double)total_mem) * 100.0;
                             
                             py::module_ builtins = py::module_::import("builtins");
-                            builtins.attr("print")("\n🚀 GPU MEMORY STATUS (After Training):");
+                            builtins.attr("print")("\nGPU MEMORY STATUS (After Training):");
                             builtins.attr("print")("==================================================");
-                            builtins.attr("print")(py::str("📊 GPU Memory:"));
+                            builtins.attr("print")(py::str("GPU Memory:"));
                             builtins.attr("print")(py::str("   Total: {:.1f} GB").format(total_gb));
                             builtins.attr("print")(py::str("   Available: {:.1f} GB").format(free_gb));
                             builtins.attr("print")(py::str("   Used: {:.1f} GB").format(used_gb));
@@ -2306,9 +2306,9 @@ PYBIND11_MODULE(RFX, m) {
                         
                         // Use Python print for proper formatting
                         py::module_ builtins = py::module_::import("builtins");
-                        builtins.attr("print")("\n💻 CPU MEMORY INFORMATION");
+                        builtins.attr("print")("\nCPU MEMORY INFORMATION");
                         builtins.attr("print")("==================================================");
-                        builtins.attr("print")("📊 System Memory:");
+                        builtins.attr("print")("System Memory:");
                         builtins.attr("print")(py::str("   Total: {:.1f} GB").format(total_gb));
                         builtins.attr("print")(py::str("   Available: {:.1f} GB").format(available_gb));
                         builtins.attr("print")(py::str("   Used: {:.1f} GB").format(used_gb));
@@ -2447,7 +2447,7 @@ PYBIND11_MODULE(RFX, m) {
                     rf::integer_t recommended_batch = rf::cuda::get_recommended_batch_size(config_.ntree);
                     recommended_batch = std::min(recommended_batch, config_.ntree);
                     py::module_ builtins = py::module_::import("builtins");
-                    builtins.attr("print")(py::str("🔧 Auto-scaling: Selected batch size = {} trees (out of {} total)").format(recommended_batch, config_.ntree));
+                    builtins.attr("print")(py::str("Auto-scaling: Selected batch size = {} trees (out of {} total)").format(recommended_batch, config_.ntree));
                 } catch (...) {
                     // Ignore errors - the C++ code will print it anyway via std::cout
                 }
@@ -3412,22 +3412,22 @@ fig.update_scenes(
                                         Plotly.restyle(gd, restyleUpdates, markerTraceIndices).then(() => {
                                             Plotly.redraw(gd).then(() => {
                                                 isUpdating = false;
-                                                console.log('✅ All selections cleared successfully (including lasso and 3D MDS)');
+                                                console.log('All selections cleared successfully (including lasso and 3D MDS)');
                                             }).catch(() => {
                                                 isUpdating = false;
-                                                console.log('✅ All selections cleared successfully (including lasso and 3D MDS)');
+                                                console.log('All selections cleared successfully (including lasso and 3D MDS)');
                                             });
                                         }).catch(() => {
                                             isUpdating = false;
-                                            console.log('✅ All selections cleared successfully (including lasso and 3D MDS)');
+                                            console.log('All selections cleared successfully (including lasso and 3D MDS)');
                                         });
                                     } else {
                                         Plotly.redraw(gd).then(() => {
                                             isUpdating = false;
-                                            console.log('✅ All selections cleared successfully (including lasso and 3D MDS)');
+                                            console.log('All selections cleared successfully (including lasso and 3D MDS)');
                                         }).catch(() => {
                                             isUpdating = false;
-                                            console.log('✅ All selections cleared successfully (including lasso and 3D MDS)');
+                                            console.log('All selections cleared successfully (including lasso and 3D MDS)');
                                         });
                                     }
                                 }).catch((err) => {
@@ -3474,7 +3474,7 @@ fig.update_scenes(
                         // Safety timeout: reset isUpdating flag after 2 seconds if something goes wrong
                         setTimeout(() => {
                             if (isUpdating) {
-                                console.warn('⚠️ Clear operation timed out, resetting isUpdating flag');
+                                console.warn('Clear operation timed out, resetting isUpdating flag');
                                 isUpdating = false;
                             }
                         }, 2000);
@@ -3723,12 +3723,12 @@ fig.update_scenes(
                                 console.log('📌 3D scene clicked, keyboard handlers should be active');
                             }, false);
                         });
-                        console.log('✅ Attached keyboard handlers to', scenes.length, '3D scene(s)');
+                        console.log('Attached keyboard handlers to', scenes.length, '3D scene(s)');
                     }, 500);  // Wait for scene to render
                 }
                 
-                console.log('✅ Keyboard shortcuts enabled: Press R or Escape to clear all selections');
-                console.log('💡 Tip: Click on the plot to focus it, then press R or Escape');
+                console.log('Keyboard shortcuts enabled: Press R or Escape to clear all selections');
+                console.log('Tip: Click on the plot to focus it, then press R or Escape');
                 console.log('🎯 3D MDS Plot: Ctrl+Alt+mouse drag to lasso select');
                 
                 // Minimal initialization - Python already sets selectionrevision=0
@@ -3960,8 +3960,8 @@ fig.update_scenes(
                     URL.revokeObjectURL(url);
                     
                     console.log('✓ Saved ' + selectedIndices.length + ' selected indices to ' + filename);
-                    alert('✅ Saved ' + selectedIndices.length + ' selected indices to ' + filename + '\\n\\n💡 The file should be in your Downloads folder or notebook directory');
-                    alert('💡 Re-run the auto-load cell in your notebook to load the DataFrame');
+                    alert('Saved ' + selectedIndices.length + ' selected indices to ' + filename + '\\n\\nThe file should be in your Downloads folder or notebook directory');
+                    alert('Re-run the auto-load cell in your notebook to load the DataFrame');
                 }
                 
                 // Create a container for buttons (works in Jupyter embedded HTML)
@@ -4129,9 +4129,9 @@ fig.update_scenes(
             
             // Use Python print instead of std::cout to avoid stream conflicts
             py::module_ builtins = py::module_::import("builtins");
-            builtins.attr("print")("\n🖥️  GPU MEMORY INFORMATION");
+            builtins.attr("print")("\n GPU MEMORY INFORMATION");
             builtins.attr("print")("==================================================");
-            builtins.attr("print")("📊 GPU Memory:");
+            builtins.attr("print")("GPU Memory:");
             builtins.attr("print")(py::str("   Total: {} MB").format(total_mb));
             builtins.attr("print")(py::str("   Available: {} MB").format(free_mb));
             builtins.attr("print")(py::str("   Used: {} MB").format(used_mb));
