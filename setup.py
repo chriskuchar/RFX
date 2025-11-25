@@ -84,7 +84,7 @@ setup(
     version='1.0.0',
     author='Chris Kuchar',
     author_email='chrisjkuchar@gmail.com',
-    description='High-Performance Random Forests with GPU Acceleration andQLORA Compression',
+    description='High-Performance Random Forests with GPU Acceleration and QLORA Compression',
     long_description=long_description,
     long_description_content_type='text/markdown',
     url='https://github.com/chriskuchar/RFX',
