@@ -666,7 +666,7 @@ If you use RFX in your research, please cite:
 ```bibtex
 @article{rfx2025,
   title={RFX: High-Performance Random Forests with GPU Acceleration and QLORA Compression},
-  author={Kuchar, Christopher},
+  author={Kuchar, Chris},
   journal={arXiv preprint arXiv:XXXX.XXXXX},
   year={2025},
   url={https://arxiv.org/abs/XXXX.XXXXX}
