@@ -83,26 +83,34 @@ Beyond prediction accuracy, RFX implements Breiman & Cutler's complete analytica
 
 ### Install from PyPI (Recommended)
 
-**Important:** RFX currently requires CUDA toolkit for building. The `pip install` command will automatically build from source. Make sure you have the prerequisites installed (see below) before running pip install.
-
-**Note:** CPU-only build option coming soon. You can still run RFX in CPU-only mode by setting `use_gpu=False` in Python after installation.
+**GPU-Enabled Version** (supports both GPU and CPU fallback):
 
 ```bash
 pip install rfx-ml
 ```
 
-**PyPI Package:** https://pypi.org/project/rfx-ml/
+**CPU-Only Version** (lightweight, no CUDA dependencies):
+
+```bash
+pip install rfx-ml-cpu
+```
+
+**Note:** These packages are mutually exclusive. Both provide the `rfx` module. Choose based on your hardware:
+- Have a GPU and want acceleration? → `rfx-ml`
+- CPU-only system or want minimal dependencies? → `rfx-ml-cpu`
+
+**PyPI Packages:** https://pypi.org/project/rfx-ml/ | https://pypi.org/project/rfx-ml-cpu/
 
 ### Prerequisites
 
 Before installing, ensure you have:
 - **CMake** 3.12 or higher
-- **Python** 3.7+ (tested up to 3.13)
-- **CUDA toolkit** 11.0+ (required for building; GPU usage optional at runtime)
+- **Python** 3.8+ (tested up to 3.13)
 - **C++ compiler** with C++17 support (GCC 7+, Clang 5+)
 - **OpenMP** (usually included with compiler)
+- **CUDA toolkit** 11.0+ (for GPU version only; not required for `rfx-ml-cpu`)
 
-**Note:** CPU-only build option coming soon. You can still run RFX in CPU-only mode by setting `use_gpu=False` in Python after installation.
+The `pip install` command will automatically build from source.
 
 ### Install from Source (Development)
 
