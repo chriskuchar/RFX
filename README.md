@@ -3,7 +3,7 @@
 [![PyPI version](https://badge.fury.io/py/rfx-ml.svg)](https://badge.fury.io/py/rfx-ml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![arXiv](https://img.shields.io/badge/arXiv-2511.19493-b31b1b.svg)](https://arxiv.org/abs/2511.19493)
-[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![C++17](https://img.shields.io/badge/C++-17-00599C.svg?logo=cplusplus)](https://en.cppreference.com/w/cpp/17)
 [![CUDA](https://img.shields.io/badge/CUDA-11.0+-76B900.svg?logo=nvidia)](https://developer.nvidia.com/cuda-toolkit)
 
