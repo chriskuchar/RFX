@@ -1,7 +1,7 @@
 # RFX: Random Forests X
 
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![PyPI version](https://badge.fury.io/py/rfx-ml.svg)](https://pypi.org/project/rfx-ml/)
+[![PyPI version](https://img.shields.io/pypi/v/rfx-ml.svg)](https://pypi.org/project/rfx-ml/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![arXiv](https://img.shields.io/badge/arXiv-2511.19493-b31b1b.svg)](https://arxiv.org/abs/2511.19493)
 [![C++](https://img.shields.io/badge/C++-17-blue.svg)](https://en.cppreference.com/)

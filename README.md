@@ -798,55 +798,22 @@ rf.clear_gpu_cache()                          # Clear GPU memory cache
 
 ## Methodology
 
-RFX strictly follows Breiman and Cutler's original Random Forest algorithms:
+RFX strictly follows Breiman and Cutler's original Random Forest algorithms with modern GPU acceleration and memory optimizations. Key components:
 
-### Classification
-- **Gini impurity** for split selection
-- **Bootstrap sampling** with replacement
-- **Random feature selection** (mtry features per split)
-- **Majority voting** for final predictions
+- **Classification**: Gini impurity, bootstrap sampling, random feature selection, majority voting
+- **Out-of-Bag Error**: Unbiased generalization estimate using ~37% OOB samples per tree
+- **Importance Measures**: Global (per-feature) and local (per-sample) explanations
+- **Proximity Matrices**: Sample similarity based on terminal node co-occurrence
+- **Case-wise Mode**: Bootstrap frequency weighting from unreleased Fortran extensions
 
-### Out-of-Bag (OOB) Error
-Each tree is trained on a bootstrap sample, leaving ~37% of samples out-of-bag. OOB error is computed using only trees where each sample was OOB, providing an unbiased estimate of generalization error without a separate test set.
+### Modern Optimizations
 
-### Importance Measures
-- **Overall importance**: Aggregates impurity reduction across all trees
-- **Local importance**: Permutes features per-sample and measures prediction change
+- **QLORA Compression**: 12,500× memory reduction via quantized low-rank approximation
+- **CPU TriBlock**: 2.7× compression with lossless quality (upper-triangle + block-sparse)
+- **SM-Aware GPU Batching**: Auto-scaling for optimal GPU utilization
+- **GPU vs CPU RNG**: Different tree structures across platforms (both statistically valid)
 
-### Proximity Matrices
-Proximity between samples $i$ and $j$ is the fraction of trees where they fall into the same terminal node:
-$$p(i,j) = \frac{1}{B} \sum_{b=1}^{B} \mathbb{I}(\text{node}_b(i) = \text{node}_b(j))$$
-
-### Case-wise vs. Non-case-wise
-- **Non-case-wise**: Standard Random Forest (equal weight to all samples)
-- **Case-wise**: Weighted by bootstrap frequency (from unreleased Fortran extensions)
-
-## Technical Details
-
-### QLORA Compression
-QLORA (Quantized Low-Rank Adaptation) reduces proximity matrix memory by storing low-rank factors $A \in \mathbb{R}^{n \times r}$ and $B \in \mathbb{R}^{n \times r}$ instead of the full $n \times n$ matrix. The proximity is reconstructed as $P \approx AB^T$. With INT8 quantization and rank-32, this achieves 12,500× compression (80GB → 6.4MB) while maintaining 99% geometric structure preservation (measured via MDS correlation).
-
-### CPU TriBlock Proximity
-Combines two optimizations:
-1. **Upper-triangle storage**: Exploits symmetry ($P_{ij} = P_{ji}$)
-2. **Block-sparse thresholding**: Zeros out blocks below threshold $\tau=0.0001$
-
-This achieves 2.7× memory reduction with **lossless quality** (MDS correlation = 1.00) on small datasets, and estimated $\rho \approx 0.98$-0.99 on large datasets.
-
-### SM-Aware GPU Batching
-Automatically selects optimal batch size based on:
-- **GPU Streaming Multiprocessor (SM) count**: Targets 2×SM concurrent blocks
-- **Available GPU memory**: Ensures sufficient memory headroom
-- **Total tree count**: Balances parallelism vs. overhead
-
-For example, on RTX 3060 (28 SMs, 12GB VRAM) with 500 trees, auto-scaling selects batch_size=100, achieving 95% SM utilization.
-
-### GPU vs. CPU Random Number Generation
-RFX uses different RNGs for CPU and GPU:
-- **CPU**: MT19937 (Mersenne Twister)
-- **GPU**: cuRAND (NVIDIA's GPU RNG)
-
-This means CPU and GPU will produce **different tree structures** and **different importance rankings** even with the same seed. This is expected and both implementations are statistically valid. **Do not compare importance values across platforms**—focus on relative rankings and predictive performance within each platform.
+For complete algorithmic details, mathematical formulations, and technical specifications, see the [arXiv paper](https://arxiv.org/abs/2511.19493).
 
 ## Citation
 

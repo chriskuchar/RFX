@@ -1,0 +1,39 @@
+High-performance Random Forest implementation with GPU acceleration, advanced interpretability, and proximity-based analysis. Faithful to Breiman & Cutler's original methodology.
+
+## Key Features
+
+### Core Capabilities
+- Complete classification with out-of-bag error estimation and confusion matrices
+- Proximity matrices for outlier detection, clustering, and visualization
+- Local importance (per-sample feature importance)
+- Interactive visualization with rfviz (3D MDS, parallel coordinates)
+
+### Performance Enhancements
+- Full GPU acceleration (CUDA) for trees, importance, and proximity computation
+- QLORA compression: 12,500× memory reduction for proximity matrices
+- CPU TriBlock: 2.7× memory savings with lossless quality
+- Scales to 1M+ samples (vs ~60K limit in traditional implementations)
+
+## Installation
+
+GPU Version:
+```
+pip install rfx-ml==1.0.2
+```
+
+CPU-Only Version:
+```
+pip install rfx-ml-cpu==1.0.2
+```
+
+## Documentation
+- [Full README](https://github.com/chriskuchar/RFX/blob/main/README.md)
+- [Examples](https://github.com/chriskuchar/RFX/tree/main/examples)
+- [arXiv Paper](https://arxiv.org/abs/2511.19493)
+
+## Requirements
+- Python 3.8+
+- C++17 compiler
+- CUDA 11.0+ (for GPU version)
+- CMake 3.18+
+
