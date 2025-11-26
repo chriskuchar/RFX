@@ -37,6 +37,7 @@ void cpu_growtree_wrapper(const real_t* x, const real_t* win, const integer_t* c
                           real_t* wl, real_t* tclasscat, real_t* tclasspop, real_t* tmpclass);
 
 // GPU-specific batch tree growing
+#ifdef CUDA_FOUND
 void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win, const integer_t* cl,
                         integer_t task_type,  // 0=CLASSIFICATION, 1=REGRESSION, 2=UNSUPERVISED
                         const integer_t* cat, const integer_t* ties, integer_t* nin,
@@ -55,6 +56,7 @@ void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win,
                         real_t* q_all, integer_t* nout_all, real_t* avimp_all,
                         real_t* qimp_all, real_t* qimpm_all, dp_t* proximity_all,
                         void** lowrank_proximity_ptr_out);  // Output: LowRankProximityMatrix pointer for low-rank mode
+#endif
 
 // Unified interface - automatically selects GPU or CPU
 void growtree(const real_t* x, const real_t* win, const integer_t* cl,

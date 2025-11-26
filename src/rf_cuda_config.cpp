@@ -3,14 +3,17 @@
 #include <iostream>
 #include <cstdlib>
 
-// Include CUDA headers only when actually needed
+// Include CUDA headers only when CUDA is available
+#ifdef CUDA_FOUND
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
+#endif
 
 namespace rf {
 namespace cuda {
 
 bool CudaConfig::initialize() {
+#ifdef CUDA_FOUND
     if (initialized_) {
         return true;
     }
@@ -42,9 +45,15 @@ bool CudaConfig::initialize() {
     initialized_ = true;
     
     return true;
+#else
+    // CPU-only build - no CUDA available
+    initialized_ = false;
+    return false;
+#endif
 }
 
 int CudaConfig::get_optimal_block_size(int problem_size) const {
+#ifdef CUDA_FOUND
     if (!initialized_ || !device_props_) return 256; // fallback
 
     // Adaptive block sizing based on GPU architecture
@@ -63,49 +72,85 @@ int CudaConfig::get_optimal_block_size(int problem_size) const {
     // Ensure it's a multiple of warp size
     optimal_size = ((optimal_size + 31) / 32) * 32;
     return std::min(optimal_size, device_props_->maxThreadsPerBlock);
+#else
+    return 256; // CPU fallback
+#endif
 }
 
 int CudaConfig::get_max_blocks() const {
+#ifdef CUDA_FOUND
     if (!initialized_ || !device_props_) return 65535; // fallback
     return device_props_->maxGridSize[0];
+#else
+    return 65535; // CPU fallback
+#endif
 }
 
 size_t CudaConfig::get_shared_memory_per_block() const {
+#ifdef CUDA_FOUND
     if (!initialized_ || !device_props_) return 48 * 1024; // 48KB fallback
     return device_props_->sharedMemPerBlock;
+#else
+    return 48 * 1024; // CPU fallback
+#endif
 }
 
 size_t CudaConfig::get_total_memory() const {
+#ifdef CUDA_FOUND
     if (!initialized_ || !device_props_) return 8ULL * 1024 * 1024 * 1024; // 8GB fallback
     return device_props_->totalGlobalMem;
+#else
+    return 8ULL * 1024 * 1024 * 1024; // CPU fallback
+#endif
 }
 
 bool CudaConfig::supports_fp16() const {
+#ifdef CUDA_FOUND
     if (!initialized_ || !device_props_) return false;
     return device_props_->major >= 6; // Pascal and newer
+#else
+    return false; // CPU doesn't support FP16
+#endif
 }
 
 bool CudaConfig::supports_tensor_cores() const {
+#ifdef CUDA_FOUND
     if (!initialized_ || !device_props_) return false;
     return device_props_->major >= 7; // Volta and newer
+#else
+    return false; // CPU doesn't have tensor cores
+#endif
 }
 
 const char* CudaConfig::get_gpu_name() const {
+#ifdef CUDA_FOUND
     if (!initialized_ || !device_props_) return "Unknown GPU";
     return device_props_->name;
+#else
+    return "CPU"; // CPU fallback
+#endif
 }
 
 int CudaConfig::get_compute_capability_major() const {
+#ifdef CUDA_FOUND
     if (!initialized_ || !device_props_) return 0;
     return device_props_->major;
+#else
+    return 0; // CPU fallback
+#endif
 }
 
 int CudaConfig::get_compute_capability_minor() const {
+#ifdef CUDA_FOUND
     if (!initialized_ || !device_props_) return 0;
     return device_props_->minor;
+#else
+    return 0; // CPU fallback
+#endif
 }
 
 size_t CudaConfig::get_available_memory() const {
+#ifdef CUDA_FOUND
     if (!initialized_ || !device_props_) return get_total_memory();
     
     size_t free, total;
@@ -114,9 +159,13 @@ size_t CudaConfig::get_available_memory() const {
     // Apply 20% safety margin to prevent WSL crashes
     // Use 80% of available memory instead of 100%
     return static_cast<size_t>(free * 0.8);
+#else
+    return get_total_memory(); // CPU fallback
+#endif
 }
 
 bool CudaConfig::can_handle_problem_size(int nsample, int mdim, int ntree) const {
+#ifdef CUDA_FOUND
     if (!initialized_) return true; // assume yes if not initialized
     
     // Estimate memory requirements
@@ -128,10 +177,14 @@ bool CudaConfig::can_handle_problem_size(int nsample, int mdim, int ntree) const
     
     // get_available_memory() already applies 20% safety margin
     return total_estimated < get_available_memory();
+#else
+    return true; // CPU fallback - assume yes
+#endif
 }
 
 // New function to check if execution should stop instead of falling back to CPU
 bool CudaConfig::should_stop_on_insufficient_memory(int nsample, int mdim, int ntree) const {
+#ifdef CUDA_FOUND
     if (!initialized_) return false; // Don't stop if not initialized
     
     // Estimate memory requirements
@@ -144,6 +197,9 @@ bool CudaConfig::should_stop_on_insufficient_memory(int nsample, int mdim, int n
     
     // If more than 50% of available memory is needed, it's risky
     return total_estimated > available_memory * 0.5;
+#else
+    return false; // CPU fallback - don't stop
+#endif
 }
 
 // New function to check CPU memory requirements
@@ -167,6 +223,7 @@ bool CudaConfig::can_handle_cpu_problem_size(int nsample, int mdim, int ntree) c
 }
 
 int CudaConfig::get_recommended_batch_size(int total_trees) const {
+#ifdef CUDA_FOUND
     if (!initialized_ || !device_props_) return std::min(100, total_trees);
     
     size_t available_memory = get_available_memory();
@@ -224,13 +281,21 @@ int CudaConfig::get_recommended_batch_size(int total_trees) const {
     }
     
     return optimal_batch_size;
+#else
+    return std::min(100, total_trees); // CPU fallback
+#endif
 }
 
 const cudaDeviceProp* CudaConfig::get_device_props() const {
+#ifdef CUDA_FOUND
     return device_props_;
+#else
+    return nullptr; // CPU fallback
+#endif
 }
 
 void CudaConfig::configure_for_gpu() {
+#ifdef CUDA_FOUND
     if (!device_props_) return;
     
     // Configure based on GPU architecture
@@ -251,7 +316,48 @@ void CudaConfig::configure_for_gpu() {
         default_block_size_ = 128;
         max_concurrent_kernels_ = 4;
     }
+#endif
 }
+
+// CPU-only stubs for CUDA functions (when CUDA_FOUND is not defined)
+#ifndef CUDA_FOUND
+bool cuda_init_runtime(bool force_cpu) {
+    return false;
+}
+
+bool cuda_is_available() {
+    return false;
+}
+
+void cuda_cleanup() {
+}
+
+void cuda_reset_device() {
+}
+
+void cuda_clear_errors() {
+}
+
+void cuda_ensure_context_ready() {
+}
+
+void cuda_finalize_operations() {
+}
+
+bool cuda_validate_context() {
+    return true; // CPU-only - always valid
+}
+
+integer_t get_recommended_batch_size(integer_t ntree) {
+    return std::min(100, ntree);
+}
+
+bool get_lowrank_factors_host(void* lowrank_proximity_ptr, 
+                               dp_t** A_host, dp_t** B_host, 
+                               integer_t* r, integer_t nsamples) {
+    return false;
+}
+#endif
 
 } // namespace cuda
 } // namespace rf

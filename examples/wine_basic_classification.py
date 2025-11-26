@@ -13,7 +13,7 @@ This reproduces the "Basic Classification" example from the README.
 
 import os
 import numpy as np
-import RFX as rf
+import rfx as rf
 
 # Optional: matplotlib for plots
 try:

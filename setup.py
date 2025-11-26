@@ -85,7 +85,7 @@ elif os.path.exists('README.md'):
 
 setup(
     name='rfx-ml',
-    version='1.0.1',
+    version='1.0.2',
     author='Chris Kuchar',
     author_email='chrisjkuchar@gmail.com',
     description='High-Performance Random Forests with GPU Acceleration and QLORA Compression',
@@ -97,10 +97,10 @@ setup(
         'Source': 'https://github.com/chriskuchar/RFX',
         'Documentation': 'https://github.com/chriskuchar/RFX/blob/main/README.md',
     },
-    ext_modules=[CMakeExtension('RFX', sourcedir='.')],
+    ext_modules=[CMakeExtension('rfx', sourcedir='.')],
     cmdclass=dict(build_ext=CMakeBuild),
     zip_safe=False,
-    python_requires='>=3.7',
+    python_requires='>=3.8',
     install_requires=[
         'numpy>=1.19.0',
         'pybind11>=2.6.0',
@@ -110,16 +110,6 @@ setup(
             'pytest>=6.0.0',
             'pytest-cov>=2.10.0',
         ],
-        'viz': [
-            'matplotlib>=3.3.0',
-            'seaborn>=0.11.0',
-            'plotly>=5.0.0',
-        ],
-        'examples': [
-            'scikit-learn>=0.24.0',
-            'pandas>=1.3.0',
-            'tqdm>=4.60.0',
-        ],
     },
     classifiers=[
         'Development Status :: 4 - Beta',
@@ -128,7 +118,6 @@ setup(
         'License :: OSI Approved :: MIT License',
         'Operating System :: POSIX :: Linux',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',

@@ -30,6 +30,7 @@
 #include "rf_finishprox.hpp"
 
 // Forward declare GPU functions - they're in separate .cu files
+#ifdef CUDA_FOUND
 namespace rf {
     extern void gpu_growtree_batch(integer_t num_trees, const real_t* x, const real_t* win, const integer_t* cl,
                                     integer_t task_type, const integer_t* cat, const integer_t* ties, integer_t* nin,
@@ -49,12 +50,11 @@ namespace rf {
                                     real_t* oob_predictions_all,  // For regression: accumulate OOB predictions
                                     void** lowrank_proximity_ptr_out);
     
-    #ifdef CUDA_FOUND
     // CLIQUE removed for v1.0 (v2.0 feature)
     // Forward declaration for GPU CLIQUE (defined in cuda/rf_clique.cu) - REMOVED
     /* extern void compute_clique_gpu(...); */
-    #endif
 }
+#endif
 
 // Include CUDA headers only when CUDA is available (for RF-GAP to low-rank conversion)
 #ifdef CUDA_FOUND
@@ -462,6 +462,7 @@ void RandomForest::fit_classification(const real_t* X, const integer_t* y, const
     // Initialize GPU if use_gpu is True
     // User explicitly requested GPU via use_gpu=True
     if (config_.use_gpu) {
+#ifdef CUDA_FOUND
         try {
             bool cuda_success = rf::cuda::cuda_init_runtime(false);
             config_.use_gpu = cuda_success;
@@ -470,6 +471,11 @@ void RandomForest::fit_classification(const real_t* X, const integer_t* y, const
         } catch (...) {
             config_.use_gpu = false;
         }
+#else
+        // CPU-only build - throw error instead of silent fallback
+        throw std::runtime_error("GPU requested (use_gpu=True) but this is a CPU-only build. "
+                                 "Set use_gpu=False or install the GPU-enabled version.");
+#endif
     } else {
         // CPU mode: use_gpu == false
         config_.use_gpu = false;
@@ -541,7 +547,11 @@ void RandomForest::fit_classification(const real_t* X, const integer_t* y, const
         // This must be set BEFORE calling fit_batch_gpu
         rf::g_config.gpu_parallel_mode0 = (batch_size > 1);
         
+#ifdef CUDA_FOUND
         fit_batch_gpu(X, y, sample_weight_.data(), batch_size);
+#else
+        throw std::runtime_error("GPU support not available in this CPU-only build. Set use_gpu=False.");
+#endif
         
         // Validate object state after GPU operations to catch corruption
         // Check that essential member variables are still valid
@@ -601,6 +611,7 @@ void RandomForest::fit_regression(const real_t* X, const real_t* y, const real_t
     // Initialize GPU if use_gpu is True
     // User explicitly requested GPU via use_gpu=True
     if (config_.use_gpu) {
+#ifdef CUDA_FOUND
         try {
             // std::cout << "DEBUG: Attempting CUDA initialization..." << std::endl;
             // std::cout.flush();
@@ -619,6 +630,11 @@ void RandomForest::fit_regression(const real_t* X, const real_t* y, const real_t
             // std::cerr << "CUDA: Initialization failed (unknown error), using CPU fallback\n";  // Commented to avoid stream conflicts
             config_.use_gpu = false;
         }
+#else
+        // CPU-only build - throw error instead of silent fallback
+        throw std::runtime_error("GPU requested (use_gpu=True) but this is a CPU-only build. "
+                                 "Set use_gpu=False or install the GPU-enabled version.");
+#endif
     } else {
         // CPU mode: use_gpu == false
         config_.use_gpu = false;
@@ -704,7 +720,11 @@ void RandomForest::fit_regression(const real_t* X, const real_t* y, const real_t
         //           << ", use_casewise=" << config_.use_casewise << std::endl;
         // std::cout.flush();
         
+#ifdef CUDA_FOUND
         fit_batch_gpu(X, y, sample_weight_.data(), batch_size);
+#else
+        throw std::runtime_error("GPU support not available in this CPU-only build. Set use_gpu=False.");
+#endif
         // std::cout << "[FIT_REGRESSION] fit_batch_gpu completed successfully" << std::endl;
         // std::cout.flush();
     }
@@ -742,6 +762,7 @@ void RandomForest::fit_unsupervised(const real_t* X, const real_t* sample_weight
     // Initialize GPU if use_gpu is True
     // User explicitly requested GPU via use_gpu=True
     if (config_.use_gpu) {
+#ifdef CUDA_FOUND
         try {
             // std::cout << "DEBUG: Attempting CUDA initialization..." << std::endl;
             // std::cout.flush();
@@ -760,6 +781,11 @@ void RandomForest::fit_unsupervised(const real_t* X, const real_t* sample_weight
             // std::cerr << "CUDA: Initialization failed (unknown error), using CPU fallback\n";  // Commented to avoid stream conflicts
             config_.use_gpu = false;
         }
+#else
+        // CPU-only build - throw error instead of silent fallback
+        throw std::runtime_error("GPU requested (use_gpu=True) but this is a CPU-only build. "
+                                 "Set use_gpu=False or install the GPU-enabled version.");
+#endif
     } else {
         // CPU mode: use_gpu == false
         config_.use_gpu = false;
@@ -871,7 +897,11 @@ void RandomForest::fit_unsupervised(const real_t* X, const real_t* sample_weight
         // std::cout.flush();
         
         // For unsupervised, pass y_train_unsupervised_ instead of nullptr
+#ifdef CUDA_FOUND
         fit_batch_gpu(X, y_train_unsupervised_.data(), sample_weight_.data(), batch_size);
+#else
+        throw std::runtime_error("GPU support not available in this CPU-only build. Set use_gpu=False.");
+#endif
         // std::cout << "[FIT_UNSUPERVISED] fit_batch_gpu completed successfully" << std::endl;  // Commented to avoid stream conflicts with Python progress bars
         // std::cout.flush();
     }
@@ -1279,6 +1309,7 @@ void RandomForest::grow_tree_single(integer_t tree_id, integer_t seed) {
     }
 }
 
+#ifdef CUDA_FOUND
 void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
                                    const real_t* sample_weight, integer_t batch_size) {
     // Before fit_batch_gpu, ensure CUDA context is ready (handles context between Jupyter cells)
@@ -1601,6 +1632,7 @@ void RandomForest::fit_batch_gpu(const real_t* X, const void* y,
     // NOTE: finalize_training() is called in fit_classification() after compute_oob_predictions()
     // Match repo version - don't call it here to avoid double call
 }
+#endif // CUDA_FOUND
 
 void RandomForest::finalize_training() {
     // Normalize OOB votes

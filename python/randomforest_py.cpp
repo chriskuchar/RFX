@@ -286,7 +286,7 @@ int quantization_string_to_int(const std::string& quant_str) {
     }
 }
 
-PYBIND11_MODULE(RFX, m) {
+PYBIND11_MODULE(rfx, m) {
     m.doc() = "Random Forest CUDA Python bindings with exact C++ parameters";
 
     // Register TaskType enum
@@ -4297,8 +4297,12 @@ fig.update_scenes(
     // circular import crashes in Jupyter notebooks. See the py::exec section.
 
     // Version info
-    m.attr("__version__") = "1.0.0";
+    m.attr("__version__") = "1.0.2";
+#ifdef CUDA_FOUND
     m.attr("__cuda_enabled__") = true;
+#else
+    m.attr("__cuda_enabled__") = false;
+#endif
     m.attr("__quantization_enabled__") = true;
     
     // Import and expose notebook helper functions + enable auto-storage

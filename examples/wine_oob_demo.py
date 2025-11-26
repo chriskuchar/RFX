@@ -6,7 +6,7 @@ Uses built-in load_wine, confusion_matrix, and classification_report
 """
 
 import numpy as np
-import RFX as rf
+import rfx as rf
 import time
 
 # Feature names for Wine dataset

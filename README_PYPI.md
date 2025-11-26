@@ -1,6 +1,11 @@
 # RFX: Random Forests X
 
-[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![PyPI version](https://badge.fury.io/py/rfx-ml.svg)](https://pypi.org/project/rfx-ml/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![arXiv](https://img.shields.io/badge/arXiv-2511.19493-b31b1b.svg)](https://arxiv.org/abs/2511.19493)
+[![C++](https://img.shields.io/badge/C++-17-blue.svg)](https://en.cppreference.com/)
+[![CUDA](https://img.shields.io/badge/CUDA-11.0+-green.svg)](https://developer.nvidia.com/cuda-toolkit)
 
 **RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology with GPU acceleration and QLORA compression.
 
@@ -17,16 +22,21 @@
 
 ## Installation
 
+**GPU-Enabled Version** (supports both GPU and CPU fallback):
+
 ```bash
-# Basic installation
 pip install rfx-ml
-
-# With visualization dependencies
-pip install rfx-ml[viz]
-
-# With all optional dependencies
-pip install rfx-ml[viz,examples]
 ```
+
+**CPU-Only Version** (lightweight, no CUDA dependencies):
+
+```bash
+pip install rfx-ml-cpu
+```
+
+**Note:** These packages are mutually exclusive. Both provide the `rfx` module. Choose based on your hardware:
+- Have a GPU and want acceleration? → `rfx-ml`
+- CPU-only system or want minimal dependencies? → `rfx-ml-cpu`
 
 **Prerequisites:** CMake 3.12+, Python 3.7+, CUDA toolkit 11.0+ (required for building; GPU usage optional at runtime), C++ compiler with C++17 support.
 
@@ -36,7 +46,7 @@ The `pip install` command will automatically build from source. Make sure you ha
 
 ```python
 import numpy as np
-import RFX as rf
+import rfx as rf
 
 # Load sample data
 X, y = rf.load_wine()

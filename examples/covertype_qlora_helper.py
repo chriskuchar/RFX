@@ -3,7 +3,7 @@
 Test low-rank QLORA on 100K Covertype samples
 This is the REAL use case for QLORA (full matrix would be 76GB!)
 """
-import RFX as rf
+import rfx as rf
 import numpy as np
 import time
 import urllib.request

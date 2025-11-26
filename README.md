@@ -88,14 +88,7 @@ Beyond prediction accuracy, RFX implements Breiman & Cutler's complete analytica
 **Note:** CPU-only build option coming soon. You can still run RFX in CPU-only mode by setting `use_gpu=False` in Python after installation.
 
 ```bash
-# Basic installation
 pip install rfx-ml
-
-# With visualization dependencies
-pip install rfx-ml[viz]
-
-# With all optional dependencies
-pip install rfx-ml[viz,examples]
 ```
 
 **PyPI Package:** https://pypi.org/project/rfx-ml/
@@ -122,11 +115,6 @@ cd RFX
 
 # Install with pip (handles CMake build automatically)
 pip install -e .
-
-# Or install with visualization dependencies
-pip install -e ".[viz]"
-
-# Or install with all optional dependencies
 pip install -e ".[viz,examples]"
 ```
 
@@ -157,7 +145,7 @@ pip install -e .
 ### Verify Installation
 
 ```python
-import RFX as rf
+import rfx as rf
 print(f"RFX version: {rf.__version__}")
 print(f"CUDA enabled: {rf.__cuda_enabled__}")
 ```
@@ -170,7 +158,7 @@ This comprehensive example demonstrates OOB evaluation, validation metrics, feat
 
 ```python
 import numpy as np
-import RFX as rf
+import rfx as rf
 
 # Feature names for Wine dataset
 feature_names = [
@@ -380,7 +368,7 @@ model.fit(X, y)
 
 ```python
 # Example: Covertype dataset (10K samples) with QLORA compression
-import RFX as rf
+import rfx as rf
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go

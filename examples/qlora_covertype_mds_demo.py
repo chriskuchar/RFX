@@ -17,7 +17,7 @@ Requirements:
 - Optional: kaleido (pip install kaleido) for PNG export
 """
 
-import RFX as rf
+import rfx as rf
 import numpy as np
 import time
 import plotly.graph_objects as go

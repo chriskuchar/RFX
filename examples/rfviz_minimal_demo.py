@@ -2,7 +2,7 @@
 """Minimal test: GPU model + RFViz HTML generation with proper 3D low-rank"""
 
 import numpy as np
-import RFX as rf
+import rfx as rf
 
 print("=" * 60)
 print("MINIMAL TEST: GPU + RFViz with 3D Low-Rank")

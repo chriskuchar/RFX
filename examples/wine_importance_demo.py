@@ -6,7 +6,7 @@ Shows overall importance rankings and local importance statistics
 """
 
 import numpy as np
-import RFX as rf
+import rfx as rf
 import time
 from scipy.stats import spearmanr
 

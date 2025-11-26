@@ -10,7 +10,7 @@ how more trees lead to better MDS coverage (fewer duplicate/invalid points).
 """
 
 import numpy as np
-import RFX as rf
+import rfx as rf
 
 try:
     import plotly.graph_objects as go
