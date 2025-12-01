@@ -7,7 +7,7 @@
 [![C++17](https://img.shields.io/badge/C++-17-00599C.svg?logo=cplusplus)](https://en.cppreference.com/w/cpp/17)
 [![CUDA](https://img.shields.io/badge/CUDA-12.8-76B900.svg?logo=nvidia)](https://developer.nvidia.com/cuda-toolkit)
 
-**RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology with GPU acceleration. Scales proximity-based workflows to 200K+ samples (vs. ~60K limit) via QLORA compression (12,500× memory reduction).
+**RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology with GPU acceleration. Provides complete interpretability: overall and local importance, proximity matrices, case-wise analysis, and interactive visualization. Scales proximity-based workflows to 200K+ samples (vs. ~60K limit) via QLORA compression (12,500× memory reduction).
 
 ## Installation
 
@@ -38,6 +38,9 @@ Pre-built Docker images with all dependencies included:
 **GPU-Enabled Container** (CUDA 12.8, supports both GPU and CPU):
 
 ```bash
+# Pull from Docker Hub
+docker pull ckuchar/rfx-gpu
+
 # Run interactively
 docker run --gpus all -it -v $(pwd):/workspace ckuchar/rfx-gpu
 
@@ -52,6 +55,9 @@ docker run --gpus all --rm ckuchar/rfx-gpu python3 /usr/local/bin/test_rfx.py
 **CPU-Only Container** (lightweight, no CUDA required):
 
 ```bash
+# Pull from Docker Hub
+docker pull ckuchar/rfx-cpu
+
 # Run interactively
 docker run -it -v $(pwd):/workspace ckuchar/rfx-cpu
 
