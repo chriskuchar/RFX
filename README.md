@@ -5,85 +5,15 @@
 [![arXiv](https://img.shields.io/badge/arXiv-2511.19493-b31b1b.svg)](https://arxiv.org/abs/2511.19493)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![C++17](https://img.shields.io/badge/C++-17-00599C.svg?logo=cplusplus)](https://en.cppreference.com/w/cpp/17)
-[![CUDA](https://img.shields.io/badge/CUDA-11.0+-76B900.svg?logo=nvidia)](https://developer.nvidia.com/cuda-toolkit)
+[![CUDA](https://img.shields.io/badge/CUDA-12.8-76B900.svg?logo=nvidia)](https://developer.nvidia.com/cuda-toolkit)
 
-**RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology, powered by a C++/CUDA back-end. The implementation faithfully follows all algorithms from the original Fortran code with no shortcuts, honoring the legacy of Leo Breiman and Adele Cutler.
-
-## Key Features
-
-RFX v1.0 provides complete classification capabilities with modern enhancements:
-
-### Core Classification Features (Original Fortran)
-- **Complete classification**: Out-of-bag error estimation, confusion matrices, and class probability predictions
-- **Proximity matrices**: Pairwise sample similarities enabling outlier detection, clustering, and visualization
-- **Overall and local importance**: Feature-level and sample-specific importance measures
-- **Case-wise analysis**: Bootstrap weighting and out-of-bag evaluation from unreleased Fortran extensions
-- **Interactive visualization**: Python-native rfviz with 3D MDS, parallel coordinates, and linked brushing
-
-### Modern Enhancements
-
-RFX breaks the proximity memory bottleneck that historically limited analysis to ~60,000 samples:
-
-- **QLORA compression**: 12,500× memory reduction (80GB → 6.4MB) with 99% geometric accuracy
-- **CPU TriBlock**: 2.7× memory savings with lossless quality for medium-scale datasets
-- **Full GPU acceleration**: CUDA for trees, importance, and proximity matrices
-- **GPU MDS**: 3D embeddings computed directly from low-rank factors
-- **SM-aware batching**: Auto-scaling for 95% GPU utilization
-
-**Result:** Proximity-based workflows (outlier detection, clustering, visualization) now scale to 200K–1M+ samples.
-
-## Why RFX?
-
-RFX provides comprehensive interpretability for Random Forests and deep insights into your data.
-
-Beyond prediction accuracy, RFX implements Breiman & Cutler's complete analytical toolkit: understand model decisions, discover data structure, and explore sample relationships.
-
-### Unique Analytical Capabilities
-
-**Local Importance** - Similar to SHAP but built into the model, not post-hoc. Understand *why* individual predictions were made. Computed efficiently during training using out-of-bag samples.
-- Use cases: Medical diagnosis explanations, fraud detection reasoning, case-specific interpretability
-
-**Proximity Matrices** - Discover hidden structure through pairwise sample similarities:
-- **Outlier detection**: Find anomalous samples
-- **Clustering**: Group similar samples (dedicated unsupervised mode in v2.0)
-- **Imputation**: Fill missing values using similar samples
-- **Visualization**: 2D/3D projections via MDS
-
-**Case-wise Analysis** - Track bootstrap frequencies to understand model uncertainty. Identify difficult samples (low agreement) vs. confident predictions.
-
-**Interactive Visualization (rfviz)** - Explore your data with coordinated views: 3D MDS projection, parallel coordinates, class votes, and feature values. Interactive workflow in Jupyter notebooks:
-1. **Select samples** via brushing (click-drag in parallel coordinates) or point-by-point (3D MDS)
-2. **Linked highlighting** between parallel coordinate plots
-3. **Export selections** as JSON directly from the plot
-4. **Import to Python** for immediate feature analysis
-- Use case: Visually identify interesting patterns (outliers, misclassifications, clusters) → select them → discover their distinguishing features in real-time
-
-### Feature Comparison
-
-| Feature | RFX | scikit-learn | cuML | randomForest (R) |
-|---------|-----|--------------|------|------------------|
-| **Interpretability & Discovery** | | | | |
-| Local importance (per-sample) | ✓ | ✗ | ✗ | ✓ |
-| Proximity matrices | ✓ | ✗ | ✗ | ✓ |
-| Case-wise analysis | ✓ | ✗ | ✗ | ~ |
-| Interactive visualization (rfviz) | ✓ | ✗ | ✗ | ~ |
-| **Modern Enhancements** | | | | |
-| Full GPU acceleration* | ✓ | ✗ | ~ | ✗ |
-| QLORA proximity (12,500× compression) | ✓ | ✗ | ✗ | ✗ |
-| CPU TriBlock proximity (2.7× compression) | ✓ | ✗ | ✗ | ✗ |
-| Scales to 200K+ samples | ✓ | ✗ | ✗ | ~60K |
-
-*RFX: GPU acceleration for all features (trees, importance, proximity). cuML: GPU trees only.
-
-**Choose RFX when you need:** Model interpretability, feature discovery, outlier detection, data exploration, or proximity-based analysis on large datasets.
-
-**Coming in v2.0:** Regression and unsupervised learning modes.
+**RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology with GPU acceleration. Scales proximity-based workflows to 200K+ samples (vs. ~60K limit) via QLORA compression (12,500× memory reduction).
 
 ## Installation
 
 ### Install from PyPI (Recommended)
 
-**GPU-Enabled Version** (supports both GPU and CPU fallback):
+**GPU-Enabled Version** (supports both GPU and CPU):
 
 ```bash
 pip install rfx-ml
@@ -100,6 +30,45 @@ pip install rfx-ml-cpu
 - CPU-only system or want minimal dependencies? → `rfx-ml-cpu`
 
 **PyPI Packages:** https://pypi.org/project/rfx-ml/ | https://pypi.org/project/rfx-ml-cpu/
+
+### Docker (Zero-Setup Installation)
+
+Pre-built Docker images with all dependencies included:
+
+**GPU-Enabled Container** (CUDA 12.8, supports both GPU and CPU):
+
+```bash
+# Run interactively
+docker run --gpus all -it -v $(pwd):/workspace ckuchar/rfx-gpu
+
+# Run with Jupyter Notebook
+docker run --gpus all -p 8888:8888 -v $(pwd):/workspace ckuchar/rfx-gpu \
+  jupyter notebook --ip=0.0.0.0 --allow-root
+
+# Test GPU functionality
+docker run --gpus all --rm ckuchar/rfx-gpu python3 /usr/local/bin/test_rfx.py
+```
+
+**CPU-Only Container** (lightweight, no CUDA required):
+
+```bash
+# Run interactively
+docker run -it -v $(pwd):/workspace ckuchar/rfx-cpu
+
+# Run with Jupyter Notebook
+docker run -p 8888:8888 -v $(pwd):/workspace ckuchar/rfx-cpu \
+  jupyter notebook --ip=0.0.0.0 --allow-root
+```
+
+**Benefits:**
+- No installation required - everything pre-configured
+- Reproducible environment across all systems
+- Isolated from host system
+- Includes MLflow, Jupyter, scikit-learn, pandas, plotly
+
+**Note:** GPU container requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) for GPU access.
+
+**Dockerfiles:** Available in `integrations/docker/` for custom builds.
 
 ### Prerequisites
 
@@ -157,6 +126,30 @@ import rfx as rf
 print(f"RFX version: {rf.__version__}")
 print(f"CUDA enabled: {rf.__cuda_enabled__}")
 ```
+
+## Why RFX?
+
+RFX provides comprehensive interpretability for Random Forests beyond prediction accuracy. Unlike scikit-learn or cuML, RFX implements Breiman & Cutler's complete analytical toolkit:
+
+**Unique Capabilities:**
+- **Local importance** - Per-sample feature importance (like SHAP, but built-in)
+- **Proximity matrices** - Pairwise sample similarities for outlier detection, clustering, and visualization
+- **Interactive visualization (rfviz)** - 3D MDS, parallel coordinates, and linked brushing in Jupyter
+- **GPU acceleration** - Full CUDA support for trees, importance, and proximity (not just training)
+- **QLORA compression** - 12,500× memory reduction enabling analysis of 200K+ samples
+
+**Choose RFX when you need:** Model interpretability, feature discovery, outlier detection, data exploration, or proximity-based analysis on large datasets.
+
+| Feature | RFX | scikit-learn | cuML | randomForest (R) |
+|---------|-----|--------------|------|------------------|
+| Local importance (per-sample) | ✓ | ✗ | ✗ | ✓ |
+| Proximity matrices | ✓ | ✗ | ✗ | ✓ |
+| Interactive visualization | ✓ | ✗ | ✗ | ~ |
+| Full GPU acceleration | ✓ | ✗ | ~ | ✗ |
+| QLORA compression (12,500×) | ✓ | ✗ | ✗ | ✗ |
+| Scales to 200K+ samples | ✓ | ✗ | ✗ | ~60K |
+
+**Coming in v2.0:** Regression and unsupervised learning modes.
 
 ## Quick Start
 
@@ -798,22 +791,55 @@ rf.clear_gpu_cache()                          # Clear GPU memory cache
 
 ## Methodology
 
-RFX strictly follows Breiman and Cutler's original Random Forest algorithms with modern GPU acceleration and memory optimizations. Key components:
+RFX strictly follows Breiman and Cutler's original Random Forest algorithms:
 
-- **Classification**: Gini impurity, bootstrap sampling, random feature selection, majority voting
-- **Out-of-Bag Error**: Unbiased generalization estimate using ~37% OOB samples per tree
-- **Importance Measures**: Global (per-feature) and local (per-sample) explanations
-- **Proximity Matrices**: Sample similarity based on terminal node co-occurrence
-- **Case-wise Mode**: Bootstrap frequency weighting from unreleased Fortran extensions
+### Classification
+- **Gini impurity** for split selection
+- **Bootstrap sampling** with replacement
+- **Random feature selection** (mtry features per split)
+- **Majority voting** for final predictions
 
-### Modern Optimizations
+### Out-of-Bag (OOB) Error
+Each tree is trained on a bootstrap sample, leaving ~37% of samples out-of-bag. OOB error is computed using only trees where each sample was OOB, providing an unbiased estimate of generalization error without a separate test set.
 
-- **QLORA Compression**: 12,500× memory reduction via quantized low-rank approximation
-- **CPU TriBlock**: 2.7× compression with lossless quality (upper-triangle + block-sparse)
-- **SM-Aware GPU Batching**: Auto-scaling for optimal GPU utilization
-- **GPU vs CPU RNG**: Different tree structures across platforms (both statistically valid)
+### Importance Measures
+- **Overall importance**: Aggregates impurity reduction across all trees
+- **Local importance**: Permutes features per-sample and measures prediction change
 
-For complete algorithmic details, mathematical formulations, and technical specifications, see the [arXiv paper](https://arxiv.org/abs/2511.19493).
+### Proximity Matrices
+Proximity between samples $i$ and $j$ is the fraction of trees where they fall into the same terminal node:
+$$p(i,j) = \frac{1}{B} \sum_{b=1}^{B} \mathbb{I}(\text{node}_b(i) = \text{node}_b(j))$$
+
+### Case-wise vs. Non-case-wise
+- **Non-case-wise**: Standard Random Forest (equal weight to all samples)
+- **Case-wise**: Weighted by bootstrap frequency (from unreleased Fortran extensions)
+
+## Technical Details
+
+### QLORA Compression
+QLORA (Quantized Low-Rank Adaptation) reduces proximity matrix memory by storing low-rank factors $A \in \mathbb{R}^{n \times r}$ and $B \in \mathbb{R}^{n \times r}$ instead of the full $n \times n$ matrix. The proximity is reconstructed as $P \approx AB^T$. With INT8 quantization and rank-32, this achieves 12,500× compression (80GB → 6.4MB) while maintaining 99% geometric structure preservation (measured via MDS correlation).
+
+### CPU TriBlock Proximity
+Combines two optimizations:
+1. **Upper-triangle storage**: Exploits symmetry ($P_{ij} = P_{ji}$)
+2. **Block-sparse thresholding**: Zeros out blocks below threshold $\tau=0.0001$
+
+This achieves 2.7× memory reduction with **lossless quality** (MDS correlation = 1.00) on small datasets, and estimated $\rho \approx 0.98$-0.99 on large datasets.
+
+### SM-Aware GPU Batching
+Automatically selects optimal batch size based on:
+- **GPU Streaming Multiprocessor (SM) count**: Targets 2×SM concurrent blocks
+- **Available GPU memory**: Ensures sufficient memory headroom
+- **Total tree count**: Balances parallelism vs. overhead
+
+For example, on RTX 3060 (28 SMs, 12GB VRAM) with 500 trees, auto-scaling selects batch_size=100, achieving 95% SM utilization.
+
+### GPU vs. CPU Random Number Generation
+RFX uses different RNGs for CPU and GPU:
+- **CPU**: MT19937 (Mersenne Twister)
+- **GPU**: cuRAND (NVIDIA's GPU RNG)
+
+This means CPU and GPU will produce **different tree structures** and **different importance rankings** even with the same seed. This is expected and both implementations are statistically valid. **Do not compare importance values across platforms**—focus on relative rankings and predictive performance within each platform.
 
 ## Citation
 

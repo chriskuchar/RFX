@@ -1,0 +1,107 @@
+# Dockerfile for RFX with GPU support
+FROM nvidia/cuda:12.8.0-devel-ubuntu22.04
+
+# Set non-interactive installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
+    cmake \
+    g++ \
+    git \
+    libomp-dev \
+    liblapack-dev \
+    libblas-dev \
+    libnuma-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip
+RUN pip3 install --upgrade pip
+
+# Install RFX from PyPI (GPU version)
+RUN pip3 install rfx-ml
+
+# Install common ML tools (optional)
+RUN pip3 install \
+    mlflow \
+    pandas \
+    scikit-learn \
+    plotly \
+    jupyter
+
+# Set working directory
+WORKDIR /workspace
+
+# Create GPU test script
+RUN echo '#!/usr/bin/env python3\n\
+import rfx\n\
+import sys\n\
+\n\
+print("="*60)\n\
+print("RFX GPU Docker Container Test")\n\
+print("="*60)\n\
+print(f"RFX version: {rfx.__version__}")\n\
+print(f"CUDA enabled in package: {rfx.__cuda_enabled__}")\n\
+print(f"CUDA available: {rfx.cuda_is_available()}")\n\
+print()\n\
+\n\
+# Load test data\n\
+X, y = rfx.load_iris()\n\
+print(f"Dataset: Iris ({X.shape[0]} samples, {X.shape[1]} features)")\n\
+print()\n\
+\n\
+# Test GPU mode\n\
+if rfx.cuda_is_available():\n\
+    print("Testing GPU mode...")\n\
+    rf_gpu = rfx.RandomForestClassifier(ntree=50, iseed=42, use_gpu=True, show_progress=True)\n\
+    rf_gpu.fit(X, y)\n\
+    pred_gpu = rf_gpu.predict(X)\n\
+    acc_gpu = (pred_gpu == y).sum() / len(y)\n\
+    print(f"GPU Accuracy: {acc_gpu:.4f}")\n\
+    print("✓ GPU mode test PASSED!")\n\
+    print()\n\
+else:\n\
+    print("⚠ GPU not available - skipping GPU test")\n\
+    print("Note: Run with --gpus all flag to enable GPU")\n\
+    print()\n\
+\n\
+# Test CPU mode (always works)\n\
+print("Testing CPU mode...")\n\
+rf_cpu = rfx.RandomForestClassifier(ntree=50, iseed=42, use_gpu=False, show_progress=True)\n\
+rf_cpu.fit(X, y)\n\
+pred_cpu = rf_cpu.predict(X)\n\
+acc_cpu = (pred_cpu == y).sum() / len(y)\n\
+print(f"CPU Accuracy: {acc_cpu:.4f}")\n\
+print("✓ CPU mode test PASSED!")\n\
+print()\n\
+print("="*60)\n\
+print("All tests completed successfully!")\n\
+print("="*60)\n\
+' > /usr/local/bin/test_rfx.py && chmod +x /usr/local/bin/test_rfx.py
+
+# Verify installation
+RUN python3 -c "import rfx; print(f'RFX version: {rfx.__version__}'); print(f'CUDA enabled: {rfx.__cuda_enabled__}')"
+
+# Expose Jupyter port (optional)
+EXPOSE 8888
+
+# Expose MLflow UI port (optional)
+EXPOSE 5000
+
+# Default command
+CMD ["/bin/bash"]
+
+# Build command:
+#   docker build -t rfx-gpu -f Dockerfile.gpu .
+#
+# Run command:
+#   docker run --gpus all -it -v $(pwd):/workspace rfx-gpu
+#
+# Run with Jupyter:
+#   docker run --gpus all -it -p 8888:8888 -v $(pwd):/workspace rfx-gpu jupyter notebook --ip=0.0.0.0 --allow-root
+#
+# Run with MLflow UI:
+#   docker run --gpus all -it -p 5000:5000 -v $(pwd):/workspace rfx-gpu mlflow ui --host 0.0.0.0
+

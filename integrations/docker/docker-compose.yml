@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  rfx-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+    image: rfx-gpu:latest
+    container_name: rfx-gpu
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+    volumes:
+      - ./workspace:/workspace
+      - ./mlruns:/workspace/mlruns  # MLflow tracking
+    ports:
+      - "8888:8888"  # Jupyter
+      - "5000:5000"  # MLflow UI
+    stdin_open: true
+    tty: true
+
+  rfx-cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+    image: rfx-cpu:latest
+    container_name: rfx-cpu
+    volumes:
+      - ./workspace:/workspace
+      - ./mlruns:/workspace/mlruns  # MLflow tracking
+    ports:
+      - "8889:8888"  # Jupyter (different port to avoid conflict)
+      - "5001:5000"  # MLflow UI (different port)
+    stdin_open: true
+    tty: true
+
+# Usage:
+#
+# Build and start GPU version:
+#   docker-compose up -d rfx-gpu
+#
+# Build and start CPU version:
+#   docker-compose up -d rfx-cpu
+#
+# Execute commands:
+#   docker-compose exec rfx-gpu python train.py
+#   docker-compose exec rfx-cpu python train.py
+#
+# Start Jupyter in GPU container:
+#   docker-compose exec rfx-gpu jupyter notebook --ip=0.0.0.0 --allow-root
+#
+# Start MLflow UI:
+#   docker-compose exec rfx-gpu mlflow ui --host 0.0.0.0
+#
+# Stop:
+#   docker-compose down
+
+
+

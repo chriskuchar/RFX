@@ -1,0 +1,55 @@
+# Dockerfile for RFX CPU-only version
+FROM python:3.10-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    cmake \
+    g++ \
+    git \
+    libomp-dev \
+    liblapack-dev \
+    libblas-dev \
+    libnuma-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip
+RUN pip install --upgrade pip
+
+# Install RFX CPU-only from PyPI
+RUN pip install rfx-ml-cpu
+
+# Install common ML tools (optional)
+RUN pip install \
+    mlflow \
+    pandas \
+    scikit-learn \
+    plotly \
+    jupyter
+
+# Set working directory
+WORKDIR /workspace
+
+# Verify installation
+RUN python -c "import rfx; print(f'RFX version: {rfx.__version__}'); print(f'CUDA enabled: {rfx.__cuda_enabled__}')"
+
+# Expose Jupyter port (optional)
+EXPOSE 8888
+
+# Expose MLflow UI port (optional)
+EXPOSE 5000
+
+# Default command
+CMD ["/bin/bash"]
+
+# Build command:
+#   docker build -t rfx-cpu -f Dockerfile.cpu .
+#
+# Run command:
+#   docker run -it -v $(pwd):/workspace rfx-cpu
+#
+# Run with Jupyter:
+#   docker run -it -p 8888:8888 -v $(pwd):/workspace rfx-cpu jupyter notebook --ip=0.0.0.0 --allow-root
+#
+# Run with MLflow UI:
+#   docker run -it -p 5000:5000 -v $(pwd):/workspace rfx-cpu mlflow ui --host 0.0.0.0
+
