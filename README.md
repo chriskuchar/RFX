@@ -147,7 +147,7 @@ RFX provides comprehensive interpretability for Random Forests beyond prediction
 - **Proximity matrices** - Pairwise sample similarities for outlier detection, clustering, and visualization
 - **Interactive visualization (rfviz)** - 3D MDS, parallel coordinates, and linked brushing in Jupyter
 - **GPU acceleration** - Full CUDA support for trees, importance, and proximity (not just training)
-- **QLORA compression** - 12,500× memory reduction enabling analysis of 200K+ samples
+- **QLORA compression** - 12,500× memory reduction enabling analysis of 1M+ samples
 
 **Choose RFX when you need:** Model interpretability, feature discovery, outlier detection, data exploration, or proximity-based analysis on large datasets.
 
@@ -158,7 +158,7 @@ RFX provides comprehensive interpretability for Random Forests beyond prediction
 | Interactive visualization | ✓ | ✗ | ✗ | ~ |
 | Full GPU acceleration | ✓ | ✗ | ~ | ✗ |
 | QLORA compression (12,500×) | ✓ | ✗ | ✗ | ✗ |
-| Scales to 200K+ samples | ✓ | ✗ | ✗ | ~60K |
+| Scales to 1M+ samples | ✓ | ✗ | ✗ | ~60K |
 
 **Coming in v2.0:** Regression and unsupervised learning modes.
 
