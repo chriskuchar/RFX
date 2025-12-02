@@ -12,7 +12,7 @@ legacy of Dr. Leo Breiman and Dr. Adele Cutler by ensuring their Random
 Forest methodology is not forgotten and remains accessible to modern
 researchers. https://www.stat.berkeley.edu/~breiman/RandomForests/
 
-**RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology with GPU acceleration. The purpose of this library is to  Provides complete interpretability: overall and local importance, proximity matrices, case-wise analysis, and interactive visualization. Scales proximity-based workflows to 1M+ samples (vs. ~60K limit) via QLORA compression (12,500× memory reduction).
+**RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology with GPU acceleration. Provides complete interpretability: overall and local importance, proximity matrices, case-wise analysis, and interactive visualization. Scales proximity-based workflows to 1M+ samples (vs. ~60K limit) via QLORA compression (12,500× memory reduction).
 
 ## Installation
 
