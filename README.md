@@ -8,7 +8,7 @@
 [![CUDA](https://img.shields.io/badge/CUDA-12.8-76B900.svg?logo=nvidia)](https://developer.nvidia.com/cuda-toolkit)
 
 This work aims to honor the
-legacy of Leo Breiman and Adele Cutler by ensuring their Random
+legacy of Dr. Leo Breiman and Dr. Adele Cutler by ensuring their Random
 Forest methodology is not forgotten and remains accessible to modern
 researchers. https://www.stat.berkeley.edu/~breiman/RandomForests/
 
