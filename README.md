@@ -7,12 +7,7 @@
 [![C++17](https://img.shields.io/badge/C++-17-00599C.svg?logo=cplusplus)](https://en.cppreference.com/w/cpp/17)
 [![CUDA](https://img.shields.io/badge/CUDA-12.8-76B900.svg?logo=nvidia)](https://developer.nvidia.com/cuda-toolkit)
 
-This work aims to honor the
-legacy of Dr. Leo Breiman and Dr. Adele Cutler by ensuring their Random
-Forest methodology is not forgotten and remains accessible to modern
-researchers. https://www.stat.berkeley.edu/~breiman/RandomForests/
-
-**RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology with GPU acceleration. Provides complete interpretability: overall and local importance, proximity matrices, case-wise analysis, and interactive visualization. Scales proximity-based workflows to 1M+ samples (vs. ~60K limit) via QLORA compression (12,500× memory reduction).
+**RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology with GPU acceleration. Provides complete interpretability: overall and local importance, proximity matrices, case-wise analysis, and interactive visualization. Scales proximity-based workflows to 200K+ samples (vs. ~60K limit) via QLORA compression (12,500× memory reduction).
 
 ## Installation
 
@@ -148,19 +143,61 @@ RFX provides comprehensive interpretability for Random Forests beyond prediction
 - **Proximity matrices** - Pairwise sample similarities for outlier detection, clustering, and visualization
 - **Interactive visualization (rfviz)** - 3D MDS, parallel coordinates, and linked brushing in Jupyter
 - **GPU acceleration** - Full CUDA support for trees, importance, and proximity (not just training)
-- **QLORA compression** - 12,500× memory reduction enabling analysis of 1M+ samples
+- **QLORA compression** - 12,500× memory reduction enabling analysis of 200K+ samples
 
 **Choose RFX when you need:** Speed, interpretability, feature discovery, outlier detection, data exploration, or proximity-based analysis on large datasets.
 
 | Feature | RFX | scikit-learn | cuML | randomForest (R) |
 |---------|-----|--------------|------|------------------|
-| Speed vs sklearn | **5.0×** | 1.0× | ~ | ~ |
 | Local importance (per-sample) | ✓ | ✗ | ✗ | ✓ |
 | Proximity matrices | ✓ | ✗ | ✗ | ✓ |
 | Interactive visualization | ✓ | ✗ | ✗ | ~ |
 | Full GPU acceleration | ✓ | ✗ | ~ | ✗ |
 | QLORA compression (12,500×) | ✓ | ✗ | ✗ | ✗ |
-| Scales to 1M+ samples | ✓ | ✗ | ✗ | ~60K |
+| Scales to 200K+ samples | ✓ | ✗ | ✗ | ~60K |
+
+### Speed Comparison: RFX vs scikit-learn
+
+**Wine Dataset (178 samples, 13 features, 3 classes, 500 trees):**
+
+| Method | Mean Time (s) | Std Dev (s) | Trees/sec | OOB Accuracy | Speedup vs sklearn |
+|--------|---------------|-------------|-----------|--------------|-------------------|
+| **RFX CPU** | 0.098 | 0.000 | 5,114 | **0.9831 ± 0.0000** | **5.55×** |
+| **RFX GPU** | 0.181 | 0.067 | 2,761 | 0.9794 ± 0.0026 | 3.00× |
+| **scikit-learn** | 0.544 | 0.001 | 919 | 0.9719 ± 0.0000 | 1.00× |
+| **sklearn (no OOB)** | 0.495 | 0.005 | 1,010 | N/A | 1.10× |
+
+**With Feature Importance:**
+
+| Method | Mean Time (s) | Std Dev (s) | Trees/sec | OOB Accuracy | Speedup vs sklearn |
+|--------|---------------|-------------|-----------|--------------|-------------------|
+| **RFX CPU** | 0.117 | 0.007 | 4,278 | **0.9831 ± 0.0000** | **5.05×** |
+| **RFX GPU** | 0.328 | 0.008 | 1,525 | 0.9794 ± 0.0053 | 1.80× |
+| **scikit-learn** | 0.590 | 0.007 | 848 | 0.9719 ± 0.0000 | 1.00× |
+
+**With Local Importance:**
+*RFX computes local importance; sklearn does NOT have this feature*
+
+| Method | Mean Time (s) | Std Dev (s) | Trees/sec | OOB Accuracy | Speedup vs sklearn |
+|--------|---------------|-------------|-----------|--------------|-------------------|
+| **RFX CPU** | 0.124 | 0.004 | 4,020 | **0.9831 ± 0.0000** | **5.74×** |
+| **RFX GPU** | 0.395 | 0.088 | 1,265 | 0.9813 ± 0.0026 | 1.81× |
+| **scikit-learn** | 0.714 | 0.011 | 700 | 0.9719 ± 0.0000 | 1.00× |
+
+**With FULL Proximity Matrix:**
+*RFX computes full proximity matrix; sklearn does NOT have this feature*
+
+| Method | Mean Time (s) | Std Dev (s) | Trees/sec | OOB Accuracy | Features | Speedup vs sklearn |
+|--------|---------------|-------------|-----------|--------------|----------|-------------------|
+| **RFX CPU** | 0.142 | 0.005 | 3,529 | **0.9831 ± 0.0000** | Full 178×178 proximity | **4.99×** |
+| **scikit-learn** | 0.707 | 0.023 | 707 | 0.9719 ± 0.0000 | Basic only | 1.00× |
+
+**Notes:**
+- **RFX is 5× faster while computing features sklearn doesn't even have** (local importance, proximity matrices)
+- sklearn does NOT support proximity matrices or local importance at all (these features don't exist)
+- Even with all these extra computations, RFX still outperforms sklearn's basic implementation
+- RFX computes OOB automatically; sklearn requires `oob_score=True`
+- Run `examples/benchmark_rfx_vs_sklearn.py` to reproduce these results on your system
 
 **Coming in v2.0:** Regression and unsupervised learning modes.
 
@@ -676,41 +713,7 @@ With high-precision accumulation (FP64) + final INT8 quantization, QLORA achieve
 
 ### Speed Benchmarks
 
-**Wine Dataset (178 samples, 13 features, 3 classes, 500 trees):**
-
-**Training + OOB (no importance):**
-
-| Method | Time (s) | Trees/sec | OOB Accuracy | vs sklearn (with OOB) |
-|--------|----------|-----------|--------------|----------------------|
-| **RFX CPU** | 0.100 | 5,009 | **98.31%** | **5.8×** |
-| **RFX GPU** | 0.181 | 2,763 | 98.13% | 3.2× |
-| **scikit-learn** | 0.576 | 868 | 97.19% | 1.0× |
-| **sklearn (no OOB)** | 0.483 | 1,036 | N/A | 1.2× |
-
-**Training + OOB + Feature Importance:**
-
-| Method | Time (s) | Trees/sec | OOB Accuracy | vs sklearn |
-|--------|----------|-----------|--------------|------------|
-| **RFX CPU** | 0.117 | 4,278 | **98.31%** | **5.0×** |
-| **RFX GPU** | 0.328 | 1,525 | 97.94% | 1.8× |
-| **scikit-learn** | 0.590 | 848 | 97.19% | 1.0× |
-
-**Training + OOB + Overall + LOCAL Importance:**
-
-| Method | Time (s) | Trees/sec | OOB Accuracy | vs sklearn |
-|--------|----------|-----------|--------------|------------|
-| **RFX CPU** | 0.124 | 4,020 | **98.31%** | **5.7×** |
-| **RFX GPU** | 0.395 | 1,265 | 98.13% | 1.8× |
-| **sklearn** | 0.714 | 700 | 97.19% | 1.0× |
-
-**Training + ALL Features (OOB + Overall + Local Importance + Proximity):**
-
-| Method | Time (s) | Trees/sec | OOB Accuracy | Features | vs sklearn |
-|--------|----------|-----------|--------------|----------|------------|
-| **RFX CPU** | 0.142 | 3,529 | **98.31%** | Full 178×178 proximity | **5.0×** |
-| **sklearn** | 0.707 | 707 | 97.19% | Basic only | 1.0× |
-
-*Note: sklearn does NOT support proximity matrices or local importance efficiently*
+See [Speed Comparison](#speed-comparison-rfx-vs-scikit-learn) above for detailed Wine dataset benchmarks (4.8-5.8× faster than sklearn).
 
 **Covertype Dataset (10K samples, QLORA rank=32):**
 - **GPU**: 50 trees: ~23s (2.2 trees/sec), 500 trees: ~3 min (2.8 trees/sec)
@@ -719,16 +722,10 @@ With high-precision accumulation (FP64) + final INT8 quantization, QLORA achieve
 - MDS Quality: 100% unique points with 50+ trees
 
 **Performance Notes:**
-- **RFX CPU is 4.8-5.8× faster** than scikit-learn on medium-sized datasets
-- **Even faster than sklearn without OOB**: RFX with OOB (0.098s) is 5.1× faster than sklearn without OOB (0.495s)
-- **Full interpretability at 5× speed**: RFX with ALL features (OOB + overall + local importance + full proximity matrix) is **5.0× faster** than sklearn with only basic features
-- **Proximity overhead**: Only ~44ms to compute full 178×178 proximity matrix on top of all other features
-- **Higher accuracy**: RFX achieves better OOB accuracy (98.31% vs 97.19%)
-- **GPU overhead**: GPU is slower than CPU on small datasets due to kernel launch overhead
-- **OOB computation**: RFX computes OOB automatically; sklearn requires `oob_score=True`
-- **Exclusive features**: RFX provides proximity matrices, local importance, case-wise analysis (not available in sklearn)
-
-**Note**: Run `examples/benchmark_rfx_vs_sklearn.py` to reproduce these benchmarks on your system.
+- **QLORA compression** enables proximity analysis on 200K+ samples (vs ~60K limit in R/sklearn)
+- **GPU scales better** with larger datasets and higher tree counts
+- For small datasets (<1K samples), CPU is faster due to GPU kernel launch overhead
+- All benchmarks include OOB computation (RFX computes automatically; sklearn requires `oob_score=True`)
 
 ## Examples
 
