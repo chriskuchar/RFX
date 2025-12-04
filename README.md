@@ -7,7 +7,12 @@
 [![C++17](https://img.shields.io/badge/C++-17-00599C.svg?logo=cplusplus)](https://en.cppreference.com/w/cpp/17)
 [![CUDA](https://img.shields.io/badge/CUDA-12.8-76B900.svg?logo=nvidia)](https://developer.nvidia.com/cuda-toolkit)
 
-**RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology with GPU acceleration. Provides complete interpretability: overall and local importance, proximity matrices, case-wise analysis, and interactive visualization. Scales proximity-based workflows to 200K+ samples (vs. ~60K limit) via QLORA compression (12,500× memory reduction).
+This work aims to honor the
+legacy of Dr. Leo Breiman and Dr. Adele Cutler by ensuring their Random
+Forest methodology is not forgotten and remains accessible to modern
+researchers. https://www.stat.berkeley.edu/~breiman/RandomForests/
+
+**RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology with GPU acceleration. Provides complete interpretability: overall and local importance, proximity matrices, case-wise analysis, and interactive visualization. Scales proximity-based workflows to 1M+ samples (vs. ~60K limit) via QLORA compression (12,500× memory reduction).
 
 ## Installation
 
@@ -143,7 +148,7 @@ RFX provides comprehensive interpretability for Random Forests beyond prediction
 - **Proximity matrices** - Pairwise sample similarities for outlier detection, clustering, and visualization
 - **Interactive visualization (rfviz)** - 3D MDS, parallel coordinates, and linked brushing in Jupyter
 - **GPU acceleration** - Full CUDA support for trees, importance, and proximity (not just training)
-- **QLORA compression** - 12,500× memory reduction enabling analysis of 200K+ samples
+- **QLORA compression** - 12,500× memory reduction enabling analysis of 1M+ samples
 
 **Choose RFX when you need:** Speed, interpretability, feature discovery, outlier detection, data exploration, or proximity-based analysis on large datasets.
 
@@ -155,7 +160,7 @@ RFX provides comprehensive interpretability for Random Forests beyond prediction
 | Interactive visualization | ✓ | ✗ | ✗ | ~ |
 | Full GPU acceleration | ✓ | ✗ | ~ | ✗ |
 | QLORA compression (12,500×) | ✓ | ✗ | ✗ | ✗ |
-| Scales to 200K+ samples | ✓ | ✗ | ✗ | ~60K |
+| Scales to 1M+ samples | ✓ | ✗ | ✗ | ~60K |
 
 **Coming in v2.0:** Regression and unsupervised learning modes.
 
