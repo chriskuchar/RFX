@@ -7,6 +7,8 @@
 [![C++17](https://img.shields.io/badge/C++-17-00599C.svg?logo=cplusplus)](https://en.cppreference.com/w/cpp/17)
 [![CUDA](https://img.shields.io/badge/CUDA-12.8-76B900.svg?logo=nvidia)](https://developer.nvidia.com/cuda-toolkit)
 
+This work aims to honor the legacy of Leo Breiman and Adele Cutler by ensuring their Random Forest methodology is not forgotten and remains accessible to modern researchers.
+
 **RFX** (Random Forests X) is a high-performance Python implementation of Breiman and Cutler's original Random Forest methodology with GPU acceleration. Provides complete interpretability: overall and local importance, proximity matrices, case-wise analysis, and interactive visualization. Scales proximity-based workflows to 200K+ samples (vs. ~60K limit) via QLORA compression (12,500× memory reduction).
 
 ## Installation
